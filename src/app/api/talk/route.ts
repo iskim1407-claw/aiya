@@ -134,41 +134,91 @@ async function performSTT(audioFile: File): Promise<string> {
 
 /**
  * LLM: 텍스트 → AI 응답
- * 현재: 키워드 기반
- * 향후: Ollama llama2:3b 또는 더 나은 모델
+ * Ollama (neural-chat 3B) 연동
  */
 async function performLLM(childText: string, settings: any): Promise<string> {
-  // 아이 눈높이에 맞는 응답 생성
+  try {
+    // Ollama API 호출
+    const response = await fetch('http://localhost:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'neural-chat',
+        prompt: generatePrompt(childText),
+        stream: false,
+        temperature: 0.7,
+        top_p: 0.9,
+      }),
+      signal: AbortSignal.timeout(30000),
+    })
+
+    if (!response.ok) {
+      console.error('[Ollama Error]', response.status)
+      throw new Error(`Ollama API 오류: ${response.status}`)
+    }
+
+    const data = await response.json()
+    const aiResponse = (data.response || '').trim()
+
+    // 응답이 너무 길면 첫 문장만
+    const firstSentence = aiResponse.split(/[.!?]/)[0].trim()
+    const result = firstSentence || '응! 좋은 생각이야!'
+
+    console.log('[LLM Response]', result)
+    return result
+  } catch (error) {
+    console.error('[LLM Error]', error)
+    // 폴백: 키워드 기반 응답
+    return fallbackKeywordResponse(childText)
+  }
+}
+
+/**
+ * Ollama용 프롬프트 생성
+ */
+function generatePrompt(childText: string): string {
+  return `당신은 2~4세 유아를 위한 친절하고 따뜻한 음성 비서입니다.
+- 매우 짧고 간단한 단어만 사용 (2-3세 수준)
+- 부드럽고 사랑스러운 말투
+- 응답은 1-2문장 이하 (짧음!)
+- 아이를 칭찬하고 격려하기
+- 안전한 콘텐츠만
+
+아이: "${childText}"
+비서 응답:`
+}
+
+/**
+ * Ollama 실패 시 폴백 (키워드 기반)
+ */
+function fallbackKeywordResponse(childText: string): string {
   const keyword = childText.toLowerCase()
 
-  // 키워드 기반 응답 (향후 LLM으로 대체)
   if (keyword.includes('심심') || keyword.includes('뭐')) {
     const activities = [
       '그래? 그럼 재미있는 이야기 해줄까?',
       '좋은 생각이야! 어떤 이야기가 좋아?',
-      '함께 놀아볼까? 숨바꼭질? 아니면 이야기?',
+      '함께 놀아볼까?',
     ]
     return activities[Math.floor(Math.random() * activities.length)]
   }
 
   if (keyword.includes('이야기') || keyword.includes('책')) {
-    return '좋은 생각이야! 옛날 옛날에... 를 듣고 싶어?'
+    return '좋은 생각이야! 옛날 옛날에...'
   }
 
   if (keyword.includes('노래') || keyword.includes('부를')) {
-    return '♪ 반짝 반짝 작은 별 ♪ 불러줄까?'
+    return '♪ 반짝 반짝 작은 별 ♪'
   }
 
   if (keyword.includes('슬') || keyword.includes('못')) {
-    return '괜찮아, 안아줄까? 기분이 어때?'
+    return '괜찮아, 안아줄까?'
   }
 
-  // 기본 응답
   const defaultResponses = [
     '응! 뭐 해줄까?',
     '좋은 생각이야!',
     '그래? 말해봐!',
-    '맞아! 재미있겠다!',
   ]
   return defaultResponses[Math.floor(Math.random() * defaultResponses.length)]
 }

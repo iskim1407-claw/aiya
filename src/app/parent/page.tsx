@@ -25,6 +25,11 @@ export default function ParentPage() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [isSaving, setIsSaving] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [stats, setStats] = useState({
+    totalCount: 0,
+    childCount: 0,
+    aiCount: 0,
+  })
 
   useEffect(() => {
     fetchSettings()
@@ -81,6 +86,16 @@ export default function ParentPage() {
       const data = await response.json()
       if (data.ok) {
         setConversations(data.conversations || [])
+        
+        // 통계 계산
+        const childCount = data.conversations.filter((c: Conversation) => c.type === 'child').length
+        const aiCount = data.conversations.filter((c: Conversation) => c.type === 'ai').length
+        
+        setStats({
+          totalCount: data.conversations.length,
+          childCount,
+          aiCount,
+        })
       }
     } catch (error) {
       console.error('조회 오류:', error)
@@ -161,6 +176,24 @@ export default function ParentPage() {
             </button>
           </div>
         </div>
+
+        {/* 통계 섹션 */}
+        {conversations.length > 0 && (
+          <div className="grid grid-cols-3 gap-4 mb-8">
+            <div className="admin-card text-center">
+              <p className="text-gray-600 text-sm">총 대화</p>
+              <p className="text-3xl font-bold text-blue-600">{stats.totalCount}</p>
+            </div>
+            <div className="admin-card text-center">
+              <p className="text-gray-600 text-sm">아이의 말</p>
+              <p className="text-3xl font-bold text-green-600">{stats.childCount}</p>
+            </div>
+            <div className="admin-card text-center">
+              <p className="text-gray-600 text-sm">아이야의 응답</p>
+              <p className="text-3xl font-bold text-purple-600">{stats.aiCount}</p>
+            </div>
+          </div>
+        )}
 
         {/* 대화 기록 섹션 */}
         <div className="admin-card">
