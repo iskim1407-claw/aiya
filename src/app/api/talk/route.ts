@@ -45,10 +45,6 @@ export async function POST(request: NextRequest) {
       childText = await performSTT(audioFile)
     }
 
-    // Step 1: STT (임시 - 실제로는 Whisper.cpp 또는 API 사용)
-    const childText = await performSTT(audioFile)
-    console.log('[STT Result]', childText)
-
     // Step 2: 부모 설정 조회
     const db = getDb()
     const parentSettings = getParentSettings(db, childId)
