@@ -2,23 +2,25 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-type State = 'waiting' | 'listening' | 'thinking' | 'speaking'
+type State = 'waiting' | 'recording' | 'processing' | 'speaking'
 
 export default function ChildPage() {
   const [state, setState] = useState<State>('waiting')
   const [sessionActive, setSessionActive] = useState(false)
   const [response, setResponse] = useState('')
-  const [lastHeard, setLastHeard] = useState('')
   const [countdown, setCountdown] = useState(0)
   const [history, setHistory] = useState<{role: string, content: string}[]>([])
   
-  const recognitionRef = useRef<any>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
   const stateRef = useRef<State>('waiting')
   const sessionActiveRef = useRef(false)
   const sessionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const recordingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
 
-  const SESSION_TIMEOUT = 30000 // 30초
+  const SESSION_TIMEOUT = 30000
 
   const updateState = useCallback((newState: State) => {
     setState(newState)
@@ -32,27 +34,16 @@ export default function ChildPage() {
 
   // 세션 타이머 리셋
   const resetSessionTimer = useCallback(() => {
-    // 기존 타이머 클리어
     if (sessionTimeoutRef.current) clearTimeout(sessionTimeoutRef.current)
     if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
     
     if (sessionActiveRef.current) {
       setCountdown(30)
-      
-      // 카운트다운
       countdownIntervalRef.current = setInterval(() => {
-        setCountdown(prev => {
-          if (prev <= 1) {
-            if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
-            return 0
-          }
-          return prev - 1
-        })
+        setCountdown(prev => prev <= 1 ? 0 : prev - 1)
       }, 1000)
       
-      // 30초 후 세션 종료
       sessionTimeoutRef.current = setTimeout(() => {
-        console.log('[세션 타임아웃]')
         endSession()
       }, SESSION_TIMEOUT)
     }
@@ -60,84 +51,41 @@ export default function ChildPage() {
 
   // 세션 종료
   const endSession = useCallback(() => {
-    console.log('[세션 종료]')
     updateSession(false)
     setCountdown(0)
-    setHistory([])  // 히스토리 초기화
+    setHistory([])
     if (sessionTimeoutRef.current) clearTimeout(sessionTimeoutRef.current)
     if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
     
-    // 작별 인사
     speak('또 불러줘!', undefined, () => {
       updateState('waiting')
       setResponse('')
-      setLastHeard('')
-      startWakeWordListening()
     })
   }, [])
 
-  const audioRef = useRef<HTMLAudioElement | null>(null)
-
-  // TTS (OpenAI audio 또는 fallback)
+  // TTS
   const speak = useCallback((text: string, audioData?: string, onEnd?: () => void) => {
-    if (typeof window === 'undefined') {
-      onEnd?.()
-      return
-    }
+    if (typeof window === 'undefined') { onEnd?.(); return }
     
-    // 기존 오디오 정리
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current = null
-    }
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null }
     window.speechSynthesis.cancel()
     
-    // OpenAI audio가 있으면 사용
     if (audioData) {
-      try {
-        const audio = new Audio(audioData)
-        audioRef.current = audio
-        
-        audio.onended = () => {
-          console.log('[Audio 재생 완료]')
-          onEnd?.()
-        }
-        
-        audio.onerror = (e) => {
-          console.log('[Audio 에러]', e)
-          speakFallback(text, onEnd)
-        }
-        
-        const playPromise = audio.play()
-        if (playPromise !== undefined) {
-          playPromise
-            .then(() => console.log('[Audio 재생 시작]'))
-            .catch((e) => {
-              console.log('[Audio 재생 실패]', e)
-              speakFallback(text, onEnd)
-            })
-        }
-      } catch (e) {
-        console.log('[Audio 생성 실패]', e)
-        speakFallback(text, onEnd)
-      }
+      const audio = new Audio(audioData)
+      audioRef.current = audio
+      audio.onended = () => onEnd?.()
+      audio.onerror = () => speakFallback(text, onEnd)
+      audio.play().catch(() => speakFallback(text, onEnd))
       return
     }
-    
-    // Fallback: 브라우저 TTS
     speakFallback(text, onEnd)
   }, [])
 
   const speakFallback = (text: string, onEnd?: () => void) => {
-    console.log('[Fallback TTS]', text)
-    window.speechSynthesis.cancel()
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = 'ko-KR'
     utterance.rate = 0.9
     utterance.pitch = 1.2
-    const voices = window.speechSynthesis.getVoices()
-    const koVoice = voices.find(v => v.lang.includes('ko'))
-    if (koVoice) utterance.voice = koVoice
     utterance.onend = () => onEnd?.()
     utterance.onerror = () => onEnd?.()
     window.speechSynthesis.speak(utterance)
@@ -145,39 +93,64 @@ export default function ChildPage() {
 
   // 작별 인사 체크
   const isGoodbye = (text: string): boolean => {
-    const goodbyes = ['잘가', '잘 가', '안녕', '바이', '바이바이', '끝', '그만', '다음에', '나중에', '끊어', '꺼']
-    const lower = text.toLowerCase().replace(/\s/g, '')
-    return goodbyes.some(g => lower.includes(g))
+    const goodbyes = ['잘가', '잘 가', '바이', '바이바이', '끝', '그만', '다음에', '나중에', '끊어', '꺼']
+    return goodbyes.some(g => text.includes(g))
   }
 
-  // API 호출
-  const callAPI = useCallback(async (text: string) => {
-    updateState('thinking')
-    
-    // 작별 인사면 세션 종료
-    if (isGoodbye(text)) {
-      setResponse('응! 또 놀자! 안녕~')
-      updateState('speaking')
-      speak('응! 또 놀자! 안녕~', undefined, () => {
-        endSession()
-      })
-      return
-    }
+  // API 호출 (Whisper STT + GPT + TTS)
+  const processAudio = useCallback(async (audioBlob: Blob) => {
+    updateState('processing')
     
     try {
-      const res = await fetch('/api/talk', {
+      // 1. Whisper STT
+      const formData = new FormData()
+      formData.append('audio', audioBlob, 'audio.webm')
+      formData.append('history', JSON.stringify(history))
+      
+      const res = await fetch('/api/talk-whisper', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, history }),
+        body: formData,
       })
+      
       const data = await res.json()
-      const message = data.ok ? data.message : '다시 말해줄래?'
-      const audio = data.audio
+      
+      if (!data.ok) {
+        setResponse('다시 말해줄래?')
+        speak('다시 말해줄래?', undefined, () => {
+          updateState('recording')
+          resetSessionTimer()
+          startRecording()
+        })
+        return
+      }
+
+      const { transcript, message, audio } = data
+      
+      // 웨이크 워드 체크 (세션 시작)
+      if (!sessionActiveRef.current) {
+        const wakeWords = ['아이야', '아이얌', '아이아', '아이여', '애야', '이야', '아야', '아이']
+        const hasWakeWord = wakeWords.some(w => transcript.toLowerCase().includes(w))
+        
+        if (!hasWakeWord) {
+          updateState('waiting')
+          return
+        }
+        
+        // 세션 시작
+        updateSession(true)
+      }
+      
+      // 작별 인사 체크
+      if (isGoodbye(transcript)) {
+        setResponse('응! 또 놀자! 안녕~')
+        speak('응! 또 놀자! 안녕~', undefined, () => endSession())
+        return
+      }
       
       // 대화 히스토리 업데이트
       setHistory(prev => [
         ...prev,
-        { role: 'user', content: text },
+        { role: 'user', content: transcript },
         { role: 'assistant', content: message }
       ].slice(-10))
       
@@ -185,215 +158,129 @@ export default function ChildPage() {
       updateState('speaking')
       
       speak(message, audio, () => {
-        updateState('listening')
+        updateState('recording')
         resetSessionTimer()
-        startSessionListening()
+        startRecording()
       })
+      
     } catch (error) {
-      console.error('API 오류:', error)
+      console.error('처리 오류:', error)
       setResponse('잠깐, 다시 해볼까?')
-      updateState('listening')
-      resetSessionTimer()
-      startSessionListening()
-    }
-  }, [speak, resetSessionTimer, history, endSession])
-
-  // 세션 중 듣기 (웨이크 워드 없이)
-  const startSessionListening = useCallback(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SpeechRecognition) return
-
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop() } catch (e) {}
-    }
-
-    const recognition = new SpeechRecognition()
-    recognition.continuous = true
-    recognition.interimResults = true
-    recognition.lang = 'ko-KR'
-    recognitionRef.current = recognition
-
-    let finalText = ''
-    let silenceTimer: NodeJS.Timeout | null = null
-
-    recognition.onresult = (event: any) => {
-      if (stateRef.current !== 'listening') return
-      
-      let interim = ''
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (event.results[i].isFinal) {
-          finalText += event.results[i][0].transcript
+      speak('잠깐, 다시 해볼까?', undefined, () => {
+        if (sessionActiveRef.current) {
+          updateState('recording')
+          startRecording()
         } else {
-          interim += event.results[i][0].transcript
+          updateState('waiting')
+        }
+      })
+    }
+  }, [history, speak, resetSessionTimer, endSession, updateSession, updateState])
+
+  // 녹음 시작
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+      mediaRecorderRef.current = mediaRecorder
+      audioChunksRef.current = []
+      
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+      
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop())
+        if (audioChunksRef.current.length > 0) {
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+          processAudio(audioBlob)
         }
       }
       
-      setLastHeard(finalText || interim)
+      mediaRecorder.start()
+      updateState('recording')
       
-      // 세션 타이머 리셋 (말하는 중)
-      resetSessionTimer()
-      
-      if (finalText) {
-        if (silenceTimer) clearTimeout(silenceTimer)
-        silenceTimer = setTimeout(() => {
-          if (finalText.trim() && stateRef.current === 'listening') {
-            recognition.stop()
-            callAPI(finalText.trim())
-            finalText = ''
-          }
-        }, 1500)
-      }
-    }
-
-    recognition.onend = () => {
-      // 세션 활성화 중이고 듣기 상태면 재시작
-      if (sessionActiveRef.current && stateRef.current === 'listening') {
-        setTimeout(() => {
-          try { recognition.start() } catch (e) {}
-        }, 300)
-      }
-    }
-
-    recognition.onerror = (event: any) => {
-      if (event.error !== 'not-allowed' && sessionActiveRef.current) {
-        setTimeout(() => {
-          try { recognition.start() } catch (e) {}
-        }, 1000)
-      }
-    }
-
-    try { recognition.start() } catch (e) {}
-  }, [callAPI, resetSessionTimer])
-
-  // 웨이크 워드 감지 (세션 비활성화 시)
-  const startWakeWordListening = useCallback(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SpeechRecognition) return
-
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop() } catch (e) {}
-    }
-
-    const recognition = new SpeechRecognition()
-    recognition.continuous = true
-    recognition.interimResults = true
-    recognition.lang = 'ko-KR'
-    recognitionRef.current = recognition
-
-    // 더 많은 변형 추가
-    const wakeWords = ['아이야', '아이얌', '아이아', '아이여', '애야', '이야', '아야', '아이', '야야']
-
-    recognition.onresult = (event: any) => {
-      if (stateRef.current !== 'waiting') return
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript
-        const lower = transcript.toLowerCase().replace(/\s/g, '')
-        
-        // 디버그용 - 뭘 듣고 있는지 표시
-        setLastHeard(transcript)
-        
-        if (wakeWords.some(w => lower.includes(w))) {
-          console.log('[웨이크 워드 감지!]', transcript)
-          recognition.stop()
-          
-          // 세션 시작
-          updateSession(true)
-          updateState('speaking')
-          setLastHeard('')
-          
-          speak('응! 뭐야?', undefined, () => {
-            updateState('listening')
-            resetSessionTimer()
-            startSessionListening()
-          })
-          return
+      // 3초 후 자동 중지 (짧은 발화용)
+      recordingTimeoutRef.current = setTimeout(() => {
+        if (mediaRecorderRef.current?.state === 'recording') {
+          mediaRecorderRef.current.stop()
         }
+      }, 3000)
+      
+    } catch (error) {
+      console.error('마이크 오류:', error)
+      updateState('waiting')
+    }
+  }, [processAudio, updateState])
+
+  // 녹음 중지
+  const stopRecording = useCallback(() => {
+    if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current)
+    if (mediaRecorderRef.current?.state === 'recording') {
+      mediaRecorderRef.current.stop()
+    }
+  }, [])
+
+  // 화면 터치로 녹음 시작/중지
+  const handleTap = useCallback(() => {
+    if (stateRef.current === 'waiting' || stateRef.current === 'recording') {
+      if (stateRef.current === 'recording') {
+        stopRecording()
+      } else {
+        startRecording()
       }
     }
-
-    recognition.onend = () => {
-      if (stateRef.current === 'waiting' && !sessionActiveRef.current) {
-        setTimeout(() => {
-          try { recognition.start() } catch (e) {}
-        }, 300)
-      }
-    }
-
-    recognition.onerror = (event: any) => {
-      console.log('[웨이크 워드 오류]', event.error)
-      if (event.error !== 'not-allowed' && stateRef.current === 'waiting') {
-        setTimeout(() => {
-          try { recognition.start() } catch (e) {}
-        }, 1000)
-      }
-    }
-
-    try { recognition.start() } catch (e) {}
-  }, [speak, resetSessionTimer, startSessionListening, updateSession, updateState])
+  }, [startRecording, stopRecording])
 
   // 초기화
   useEffect(() => {
-    window.speechSynthesis.getVoices()
-    
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(() => {
-        updateState('waiting')
-        startWakeWordListening()
-      })
-      .catch((err) => {
-        console.error('[마이크 권한 거부]', err)
-      })
-
+    window.speechSynthesis?.getVoices()
     return () => {
-      if (recognitionRef.current) try { recognitionRef.current.stop() } catch (e) {}
       if (sessionTimeoutRef.current) clearTimeout(sessionTimeoutRef.current)
       if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
+      if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current)
     }
-  }, [startWakeWordListening, updateState])
+  }, [])
 
   const statusText = {
-    waiting: '💤 "아이야~" 라고 불러봐!',
-    listening: `🎤 듣고 있어요! ${countdown > 0 ? `(${countdown}초)` : ''}`,
-    thinking: '💭 생각 중...',
+    waiting: '👆 터치해서 말해봐!',
+    recording: '🎤 듣고 있어요...',
+    processing: '💭 생각 중...',
     speaking: '🔊 말하는 중...',
   }
 
   const statusColor = {
     waiting: 'bg-purple-500',
-    listening: 'bg-green-500',
-    thinking: 'bg-yellow-400 text-gray-800',
+    recording: 'bg-red-500 animate-pulse',
+    processing: 'bg-yellow-400 text-gray-800',
     speaking: 'bg-blue-500',
   }
 
   const emoji = {
     waiting: '😴',
-    listening: '👂',
-    thinking: '🤔',
+    recording: '👂',
+    processing: '🤔',
     speaking: '🗣️',
   }
 
   return (
-    <main className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200">
+    <main 
+      className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200 select-none"
+      onClick={handleTap}
+    >
       <div className="text-center mb-6">
-        <div className={`text-8xl mb-4 ${state === 'listening' ? 'animate-bounce' : state === 'thinking' ? 'animate-pulse' : ''}`}>
+        <div className={`text-8xl mb-4 ${state === 'recording' ? 'animate-bounce' : state === 'processing' ? 'animate-pulse' : ''}`}>
           {emoji[state]}
         </div>
         <h1 className="text-5xl font-bold text-purple-800 mb-3">아이야!</h1>
         {sessionActive && (
-          <p className="text-sm text-purple-600 bg-purple-100 px-3 py-1 rounded-full inline-block">
-            세션 활성화 중
+          <p className="text-sm text-green-600 bg-green-100 px-3 py-1 rounded-full inline-block">
+            대화 중 {countdown > 0 && `(${countdown}초)`}
           </p>
         )}
       </div>
 
-      {lastHeard && (state === 'listening' || state === 'waiting') && (
-        <div className="mb-4 px-5 py-2 bg-white/60 rounded-full text-gray-700 text-lg">
-          🎧 "{lastHeard}"
-        </div>
-      )}
-
-      {response && (state === 'speaking' || state === 'listening') && (
+      {response && (
         <div className="mt-2 p-6 bg-white rounded-3xl shadow-xl max-w-sm text-center">
           <p className="text-2xl text-gray-800 leading-relaxed font-bold">
             {response}
@@ -401,7 +288,7 @@ export default function ChildPage() {
         </div>
       )}
 
-      {state === 'thinking' && (
+      {state === 'processing' && (
         <div className="mt-6">
           <div className="animate-spin rounded-full h-14 w-14 border-4 border-purple-300 border-t-purple-600"></div>
         </div>
