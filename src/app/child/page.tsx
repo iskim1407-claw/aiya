@@ -59,7 +59,7 @@ export default function ChildPage() {
   }
 
   // 웨이크워드 체크
-  const isWake = (t: string) => ['아이야','아이얌','아이아','아이여','애야','이야','아야'].some(w => t.includes(w))
+  const isWake = (t: string) => ['아이야','아이얌','아이아','아이여','아이영','애야','이야','아야','아이요'].some(w => t.includes(w))
   
   // 작별 체크
   const isBye = (t: string) => ['잘가','바이','끝','그만','안녕'].some(w => t.includes(w))
