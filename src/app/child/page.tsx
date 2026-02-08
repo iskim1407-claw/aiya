@@ -142,20 +142,25 @@ export default function ChildPage() {
 
   // 시작
   async function handleStart() {
-    setDebugMsg('오디오 준비...')
+    setDebugMsg('마이크 권한 요청 중...')
     try {
+      // 타임아웃 10초
+      const timeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('시간 초과 - 마이크 권한 팝업 확인!')), 10000)
+      )
+      
+      const getMic = navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = await Promise.race([getMic, timeout]) as MediaStream
+      
+      // 오디오 unlock
       const a = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=')
       await a.play().catch(() => {})
       
-      setDebugMsg('마이크 요청...')
-      streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true })
-      
-      setDebugMsg('시작!')
       runningRef.current = true
       wakeLoop()
     } catch (e: any) {
-      console.error('마이크 에러:', e)
-      setDebugMsg(`에러: ${e.name || e.message || '권한 거부'}`)
+      console.error('에러:', e)
+      setDebugMsg(e.message || '마이크 권한 거부됨')
     }
   }
 
