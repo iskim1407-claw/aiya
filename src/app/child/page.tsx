@@ -36,7 +36,7 @@ export default function ChildPage() {
     })
   }
 
-  // 녹음
+  // 녹음 (iOS 최적화: timeslice 사용)
   async function record(sec: number): Promise<Blob | null> {
     if (!streamRef.current) return null
     const mr = new MediaRecorder(streamRef.current)
@@ -44,7 +44,7 @@ export default function ChildPage() {
     mr.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
     return new Promise((resolve) => {
       mr.onstop = () => resolve(new Blob(chunks, { type: 'audio/webm' }))
-      mr.start()
+      mr.start(500) // 500ms마다 데이터 수집 (iOS 호환성)
       setTimeout(() => { if (mr.state === 'recording') mr.stop() }, sec * 1000)
     })
   }
@@ -54,8 +54,22 @@ export default function ChildPage() {
     const fd = new FormData()
     fd.append('audio', blob, 'a.webm')
     if (withReply) fd.append('history', JSON.stringify(historyRef.current))
-    const r = await fetch('/api/talk-whisper', { method: 'POST', body: fd })
-    return r.json()
+    
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15000) // 15초 타임아웃
+    
+    try {
+      const r = await fetch('/api/talk-whisper', { 
+        method: 'POST', 
+        body: fd,
+        signal: controller.signal 
+      })
+      clearTimeout(timeout)
+      return r.json()
+    } catch (e) {
+      clearTimeout(timeout)
+      return { ok: false, error: 'timeout' }
+    }
   }
 
   // 웨이크워드 체크
