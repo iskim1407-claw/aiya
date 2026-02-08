@@ -2,32 +2,54 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 
-type State = 'waiting' | 'recording' | 'processing' | 'speaking'
+type State = 'init' | 'waiting' | 'recording' | 'processing' | 'speaking'
 
 export default function ChildPage() {
-  const [state, setState] = useState<State>('waiting')
+  const [state, setState] = useState<State>('init')
   const [sessionActive, setSessionActive] = useState(false)
   const [response, setResponse] = useState('')
   const [lastHeard, setLastHeard] = useState('')
   const [countdown, setCountdown] = useState(0)
   const [history, setHistory] = useState<{role: string, content: string}[]>([])
+  const [audioUnlocked, setAudioUnlocked] = useState(false)
   
   const recognitionRef = useRef<any>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
-  const stateRef = useRef<State>('waiting')
+  const stateRef = useRef<State>('init')
   const sessionActiveRef = useRef(false)
   const sessionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const recordingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioUnlockedRef = useRef(false)
 
   const SESSION_TIMEOUT = 30000
 
   const updateState = useCallback((newState: State) => {
     setState(newState)
     stateRef.current = newState
+  }, [])
+
+  // 오디오 unlock (브라우저 autoplay 정책)
+  const unlockAudio = useCallback(async () => {
+    if (audioUnlockedRef.current) return
+    
+    // 무음 오디오 재생으로 unlock
+    const silentAudio = new Audio('data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYoRwmHAAAAAAD/+9DEAAAIAANIAAAAgAAA0gAAABBMTEhJSWBgYGBgVFRVRcXFxMTExcXFhYWFkZGRpaWloKChsbGxqamprq6utra2u7u7wcHBxsbGy8vL0dHR1tbW3Nzc4eHh5ubm7Ozs8fHx9vb2+/v7//8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//tQxAADwAADSAAAAAIAA0gAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')
+    try {
+      await silentAudio.play()
+      audioUnlockedRef.current = true
+      setAudioUnlocked(true)
+      console.log('[Audio Unlocked]')
+    } catch (e) {
+      console.log('[Audio Unlock Failed]', e)
+    }
+
+    // Speech Synthesis도 unlock
+    const utterance = new SpeechSynthesisUtterance('')
+    window.speechSynthesis.speak(utterance)
   }, [])
 
   const updateSession = useCallback((active: boolean) => {
@@ -55,12 +77,16 @@ export default function ChildPage() {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null }
     window.speechSynthesis.cancel()
     
+    console.log('[TTS 시작]', text, audioData ? '(OpenAI)' : '(브라우저)')
+    
     if (audioData) {
       const audio = new Audio(audioData)
       audioRef.current = audio
-      audio.onended = () => onEnd?.()
-      audio.onerror = () => speakFallback(text, onEnd)
-      audio.play().catch(() => speakFallback(text, onEnd))
+      audio.onended = () => { console.log('[Audio 완료]'); onEnd?.() }
+      audio.onerror = (e) => { console.log('[Audio 에러]', e); speakFallback(text, onEnd) }
+      audio.play()
+        .then(() => console.log('[Audio 재생 시작]'))
+        .catch((e) => { console.log('[Audio 재생 실패]', e); speakFallback(text, onEnd) })
       return
     }
     speakFallback(text, onEnd)
@@ -248,38 +274,62 @@ export default function ChildPage() {
     try { recognition.start() } catch (e) {}
   }, [speak, resetSessionTimer, startSessionRecording])
 
+  // 시작 버튼 핸들러
+  const handleStart = useCallback(async () => {
+    await unlockAudio()
+    
+    try {
+      streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true })
+      window.speechSynthesis?.getVoices()
+      updateState('waiting')
+      startWakeWordListening()
+    } catch (e) {
+      console.error('[마이크 권한 실패]', e)
+    }
+  }, [unlockAudio, startWakeWordListening])
+
   // 초기화
   useEffect(() => {
-    window.speechSynthesis?.getVoices()
-    
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then((stream) => {
-        streamRef.current = stream
-        updateState('waiting')
-        startWakeWordListening()
-      })
-      .catch(console.error)
-
     return () => {
       if (sessionTimeoutRef.current) clearTimeout(sessionTimeoutRef.current)
       if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
       if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current)
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop())
     }
-  }, [startWakeWordListening])
+  }, [])
 
-  const statusText = {
+  const statusText: Record<State, string> = {
+    init: '시작하기를 눌러주세요',
     waiting: '💤 "아이야~" 라고 불러봐!',
     recording: '🎤 듣고 있어요...',
     processing: '💭 생각 중...',
     speaking: '🔊 말하는 중...',
   }
 
-  const statusColor = {
+  const statusColor: Record<State, string> = {
+    init: 'bg-gray-400',
     waiting: 'bg-purple-500',
     recording: 'bg-green-500 animate-pulse',
     processing: 'bg-yellow-400 text-gray-800',
     speaking: 'bg-blue-500',
+  }
+
+  // 시작 화면
+  if (state === 'init') {
+    return (
+      <main className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200">
+        <div className="text-9xl mb-8 animate-bounce">👋</div>
+        <h1 className="text-5xl font-bold text-purple-800 mb-4">아이야!</h1>
+        <p className="text-xl text-purple-600 mb-8">AI 친구와 대화해요</p>
+        <button
+          onClick={handleStart}
+          className="px-12 py-6 bg-gradient-to-r from-pink-500 to-purple-500 text-white text-3xl font-bold rounded-full shadow-2xl active:scale-95 transition-transform"
+        >
+          🎤 시작하기
+        </button>
+        <p className="mt-6 text-gray-500 text-sm">버튼을 누르면 마이크와 스피커가 켜져요</p>
+      </main>
+    )
   }
 
   return (
