@@ -80,11 +80,12 @@ export default function ChildPage() {
   async function wakeLoop() {
     setState('listening')
     while (runningRef.current && !inSessionRef.current) {
-      const blob = await record(2)
+      const blob = await record(4)
       if (!blob || !runningRef.current) break
       try {
         const d = await transcribe(blob, false)
-        if (d.transcript) {
+        console.log('[웨이크 체크]', d)
+        if (d.ok && d.transcript) {
           setLastHeard(d.transcript)
           if (isWake(d.transcript)) {
             inSessionRef.current = true
