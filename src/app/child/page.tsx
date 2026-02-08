@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 type State = 'init' | 'recording' | 'processing' | 'speaking'
 
@@ -8,236 +8,163 @@ export default function ChildPage() {
   const [state, setState] = useState<State>('init')
   const [response, setResponse] = useState('')
   const [lastHeard, setLastHeard] = useState('')
-  const [history, setHistory] = useState<{role: string, content: string}[]>([])
+  const [debugMsg, setDebugMsg] = useState('')
   
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const audioChunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
-  const stateRef = useRef<State>('init')
-  const recordingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const historyRef = useRef<{role: string, content: string}[]>([])
   const autoRestartRef = useRef(true)
 
-  const updateState = useCallback((newState: State) => {
-    setState(newState)
-    stateRef.current = newState
-  }, [])
-
-  // TTS (5초 타임아웃으로 stuck 방지)
-  const speak = useCallback((text: string, audioData?: string, onEnd?: () => void) => {
-    if (typeof window === 'undefined') { onEnd?.(); return }
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null }
-    window.speechSynthesis?.cancel()
-    
-    let finished = false
-    const finish = () => {
-      if (finished) return
-      finished = true
-      onEnd?.()
-    }
-    
-    // 5초 후 강제 진행 (stuck 방지)
-    const timeout = setTimeout(() => {
-      console.log('[TTS 타임아웃 - 강제 진행]')
-      finish()
-    }, 5000)
-    
-    const done = () => {
-      clearTimeout(timeout)
-      finish()
-    }
-    
-    console.log('[TTS]', text, audioData ? '(OpenAI)' : '(브라우저)')
-    
-    if (audioData) {
-      const audio = new Audio(audioData)
-      audioRef.current = audio
-      audio.onended = () => { console.log('[Audio 완료]'); done() }
-      audio.onerror = (e) => { console.log('[Audio 에러]', e); done() }
-      audio.play()
-        .then(() => console.log('[Audio 재생 시작]'))
-        .catch((e) => { console.log('[Audio 재생 실패]', e); done() })
-      return
-    }
-    
-    // 브라우저 TTS fallback
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.lang = 'ko-KR'
-    utterance.rate = 0.9
-    utterance.pitch = 1.2
-    utterance.onend = () => done()
-    utterance.onerror = () => done()
-    window.speechSynthesis.speak(utterance)
-  }, [])
-
-  // 작별 인사 체크
-  const isGoodbye = (text: string): boolean => {
-    const goodbyes = ['잘가', '잘 가', '바이', '바이바이', '끝', '그만', '다음에', '나중에', '안녕']
-    return goodbyes.some(g => text.includes(g))
+  // TTS 재생
+  async function speak(text: string, audioData?: string): Promise<void> {
+    return new Promise((resolve) => {
+      const timeout = setTimeout(resolve, 5000) // 5초 타임아웃
+      
+      if (audioData) {
+        const audio = new Audio(audioData)
+        audio.onended = () => { clearTimeout(timeout); resolve() }
+        audio.onerror = () => { clearTimeout(timeout); resolve() }
+        audio.play().catch(() => { clearTimeout(timeout); resolve() })
+      } else {
+        const utterance = new SpeechSynthesisUtterance(text)
+        utterance.lang = 'ko-KR'
+        utterance.rate = 0.9
+        utterance.onend = () => { clearTimeout(timeout); resolve() }
+        utterance.onerror = () => { clearTimeout(timeout); resolve() }
+        window.speechSynthesis.speak(utterance)
+      }
+    })
   }
 
-  // Whisper로 오디오 처리
-  const processAudio = useCallback(async (audioBlob: Blob) => {
-    updateState('processing')
+  // 녹음 & 처리
+  async function recordAndProcess() {
+    if (!streamRef.current || !autoRestartRef.current) return
+    
+    setState('recording')
+    setDebugMsg('녹음 중...')
     
     try {
+      // 녹음
+      const mediaRecorder = new MediaRecorder(streamRef.current)
+      const chunks: Blob[] = []
+      
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data)
+      }
+      
+      const audioBlob = await new Promise<Blob>((resolve) => {
+        mediaRecorder.onstop = () => resolve(new Blob(chunks, { type: 'audio/webm' }))
+        mediaRecorder.start()
+        setTimeout(() => mediaRecorder.stop(), 3000)
+      })
+      
+      if (!autoRestartRef.current) return
+      
+      // 처리
+      setState('processing')
+      setDebugMsg('처리 중...')
+      
       const formData = new FormData()
       formData.append('audio', audioBlob, 'audio.webm')
-      formData.append('history', JSON.stringify(history))
+      formData.append('history', JSON.stringify(historyRef.current))
       
       const res = await fetch('/api/talk-whisper', { method: 'POST', body: formData })
       const data = await res.json()
       
       if (!data.ok || !data.transcript) {
-        console.log('[인식 안됨]')
-        if (autoRestartRef.current) {
-          updateState('recording')
-          startRecording()
-        }
+        setDebugMsg('인식 안됨 - 다시 듣기')
+        if (autoRestartRef.current) recordAndProcess()
         return
       }
-
-      const { transcript, message, audio } = data
-      setLastHeard(transcript)
-      console.log('[인식됨]', transcript)
+      
+      setLastHeard(data.transcript)
+      setResponse(data.message)
+      setDebugMsg('')
       
       // 히스토리 업데이트
-      setHistory(prev => [...prev, { role: 'user', content: transcript }, { role: 'assistant', content: message }].slice(-10))
+      historyRef.current = [...historyRef.current, 
+        { role: 'user', content: data.transcript },
+        { role: 'assistant', content: data.message }
+      ].slice(-10)
       
       // 작별 체크
-      if (isGoodbye(transcript)) {
-        setResponse('응! 또 놀자! 👋')
+      const goodbyes = ['잘가', '바이', '끝', '그만', '안녕']
+      if (goodbyes.some(g => data.transcript.includes(g))) {
         autoRestartRef.current = false
-        speak('응! 또 놀자! 안녕!', audio, () => {
-          updateState('init')
-          setResponse('')
-          setLastHeard('')
-          setHistory([])
-        })
+        setState('speaking')
+        await speak(data.message, data.audio)
+        setState('init')
+        setResponse('')
+        setLastHeard('')
+        historyRef.current = []
         return
       }
       
-      setResponse(message)
-      updateState('speaking')
+      // 응답 말하기
+      setState('speaking')
+      await speak(data.message, data.audio)
       
-      speak(message, audio, () => {
-        if (autoRestartRef.current) {
-          updateState('recording')
-          startRecording()
-        }
-      })
+      // 다시 듣기
+      if (autoRestartRef.current) recordAndProcess()
       
-    } catch (error) {
-      console.error('[처리 오류]', error)
-      if (autoRestartRef.current) {
-        updateState('recording')
-        startRecording()
-      }
+    } catch (e: any) {
+      setDebugMsg('에러: ' + e.message)
+      if (autoRestartRef.current) setTimeout(recordAndProcess, 1000)
     }
-  }, [history, speak])
+  }
 
-  // 녹음 시작
-  const startRecording = useCallback(async () => {
-    try {
-      if (!streamRef.current) {
-        streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true })
-      }
-      
-      const mediaRecorder = new MediaRecorder(streamRef.current, { mimeType: 'audio/webm' })
-      mediaRecorderRef.current = mediaRecorder
-      audioChunksRef.current = []
-      
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data)
-      }
-      
-      mediaRecorder.onstop = () => {
-        if (audioChunksRef.current.length > 0) {
-          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-          processAudio(audioBlob)
-        }
-      }
-      
-      mediaRecorder.start()
-      updateState('recording')
-      console.log('[녹음 시작]')
-      
-      // 3초 녹음
-      recordingTimeoutRef.current = setTimeout(() => {
-        if (mediaRecorderRef.current?.state === 'recording') {
-          mediaRecorderRef.current.stop()
-          console.log('[녹음 완료]')
-        }
-      }, 3000)
-      
-    } catch (error) {
-      console.error('[녹음 오류]', error)
-    }
-  }, [processAudio])
-
-  // 시작 버튼
-  const handleStart = useCallback(async () => {
-    console.log('[시작 버튼 클릭]')
-    setResponse('시작 중...')
+  // 시작
+  async function handleStart() {
+    setDebugMsg('시작 중...')
     
     try {
       // 오디오 unlock
-      const silentAudio = new Audio('data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYoRwmHAAAAAAD/+9DEAAAIAANIAAAAgAAA0gAAABBMTEhJSWBgYGBgVFRVRcXFxMTExcXFhYWFkZGRpaWloKChsbGxqamprq6utra2u7u7wcHBxsbGy8vL0dHR1tbW3Nzc4eHh5ubm7Ozs8fHx9vb2+/v7//8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//tQxAADwAADSAAAAAIAA0gAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')
-      try { await silentAudio.play() } catch (e) { console.log('[Audio unlock 실패]', e) }
+      const audio = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=')
+      await audio.play().catch(() => {})
       
-      window.speechSynthesis?.cancel()
-      
-      // 마이크 권한 요청
-      console.log('[마이크 권한 요청]')
+      // 마이크
       streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true })
-      console.log('[마이크 권한 성공]')
-      
       autoRestartRef.current = true
-      setResponse('')
       
-      // 인사하고 녹음 시작
-      speak('응! 뭐야?', undefined, () => {
-        startRecording()
-      })
+      setDebugMsg('')
+      setState('speaking')
+      await speak('응! 뭐야?')
+      
+      recordAndProcess()
+      
     } catch (e: any) {
-      console.error('[시작 에러]', e)
-      setResponse('마이크 권한이 필요해요! 🎤')
+      setDebugMsg('마이크 권한 필요: ' + e.message)
     }
-  }, [speak, startRecording])
+  }
 
-  // 정지 버튼
-  const handleStop = useCallback(() => {
+  // 정지
+  function handleStop() {
     autoRestartRef.current = false
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop()
-    }
-    if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current)
-    updateState('init')
+    setState('init')
     setResponse('')
     setLastHeard('')
-    setHistory([])
-    speak('또 불러줘!')
-  }, [speak])
+    setDebugMsg('')
+    historyRef.current = []
+  }
 
   // 정리
   useEffect(() => {
     return () => {
-      if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current)
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop())
+      autoRestartRef.current = false
+      streamRef.current?.getTracks().forEach(t => t.stop())
     }
   }, [])
 
-  // 시작 화면 - 화면 아무데나 터치하면 시작
+  // 시작 화면
   if (state === 'init') {
     return (
       <main 
         onClick={handleStart}
-        className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200 cursor-pointer active:bg-pink-300 transition-colors"
+        className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200 cursor-pointer select-none"
       >
         <div className="text-9xl mb-8 animate-bounce">🤗</div>
         <h1 className="text-5xl font-bold text-purple-800 mb-4">아이야!</h1>
-        {response ? (
-          <p className="text-xl text-red-500 mb-8">{response}</p>
+        {debugMsg ? (
+          <p className="text-lg text-orange-600 mb-8">{debugMsg}</p>
         ) : (
           <p className="text-2xl text-purple-600 mb-8 animate-pulse">화면을 터치해요! 👆</p>
         )}
@@ -246,7 +173,7 @@ export default function ChildPage() {
   }
 
   return (
-    <main className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200">
+    <main className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200 select-none">
       <div className="text-center mb-6">
         <div className={`text-8xl mb-4 ${state === 'recording' ? 'animate-bounce' : state === 'processing' ? 'animate-pulse' : ''}`}>
           {state === 'recording' ? '👂' : state === 'processing' ? '🤔' : '🗣️'}
@@ -259,7 +186,7 @@ export default function ChildPage() {
 
       {lastHeard && (
         <div className="mb-4 px-5 py-2 bg-white/60 rounded-full text-gray-700 text-lg">
-          🎧 "{lastHeard}"
+          "{lastHeard}"
         </div>
       )}
 
@@ -269,16 +196,13 @@ export default function ChildPage() {
         </div>
       )}
 
-      {state === 'processing' && (
-        <div className="mt-6">
-          <div className="animate-spin rounded-full h-14 w-14 border-4 border-purple-300 border-t-purple-600"></div>
-        </div>
+      {debugMsg && (
+        <p className="mt-4 text-sm text-orange-600">{debugMsg}</p>
       )}
 
-      {/* 부모용 끝내기 - 우측 하단 작게 */}
       <button
         onClick={handleStop}
-        className="fixed bottom-4 right-4 px-3 py-2 bg-gray-400/50 text-white text-sm rounded-full"
+        className="fixed bottom-4 right-4 w-10 h-10 bg-gray-400/50 text-white rounded-full"
       >
         ✕
       </button>
