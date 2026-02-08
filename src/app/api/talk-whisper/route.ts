@@ -42,6 +42,7 @@ export async function POST(request: NextRequest) {
     whisperForm.append('file', audioFile)
     whisperForm.append('model', 'whisper-1')
     whisperForm.append('language', 'ko')
+    whisperForm.append('temperature', '0')  // hallucination 줄이기
 
     const sttRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
@@ -55,7 +56,14 @@ export async function POST(request: NextRequest) {
     }
 
     const sttData = await sttRes.json()
-    const transcript = sttData.text?.trim() || ''
+    let transcript = sttData.text?.trim() || ''
+
+    // Whisper hallucination 필터링 (무음일 때 나오는 가짜 텍스트)
+    const hallucinations = ['뉴스', 'MBC', 'KBS', 'SBS', '기자', '열어보기', '시청', '감사합니다', '구독', '좋아요']
+    if (hallucinations.some(h => transcript.includes(h))) {
+      console.log('[Hallucination 필터]', transcript)
+      return NextResponse.json({ ok: false, error: '인식 안됨' })
+    }
 
     if (!transcript) {
       return NextResponse.json({ ok: false, error: '인식 안됨' })
