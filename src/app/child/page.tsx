@@ -4,10 +4,19 @@ import { useState, useEffect, useRef } from 'react'
 
 type State = 'init' | 'listening' | 'recording' | 'processing' | 'speaking'
 
+// SpeechRecognition 타입
+declare global {
+  interface Window {
+    SpeechRecognition: any
+    webkitSpeechRecognition: any
+  }
+}
+
 export default function ChildPage() {
   const [state, setState] = useState<State>('init')
   const [response, setResponse] = useState('')
   const [lastHeard, setLastHeard] = useState('')
+  const [interimText, setInterimText] = useState('') // 실시간 인식 텍스트
   const [debugMsg, setDebugMsg] = useState('')
   
   const streamRef = useRef<MediaStream | null>(null)
@@ -15,6 +24,7 @@ export default function ChildPage() {
   const runningRef = useRef(false)
   const inSessionRef = useRef(false)
   const timeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const recognitionRef = useRef<any>(null)
 
   // TTS
   async function speak(text: string, audioData?: string): Promise<void> {
@@ -34,6 +44,46 @@ export default function ChildPage() {
         window.speechSynthesis.speak(u)
       }
     })
+  }
+
+  // 실시간 음성인식 시작
+  function startRealtimeSpeech() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognition) return
+    
+    try {
+      const recognition = new SpeechRecognition()
+      recognition.lang = 'ko-KR'
+      recognition.continuous = true
+      recognition.interimResults = true
+      
+      recognition.onresult = (event: any) => {
+        let interim = ''
+        let final = ''
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript
+          if (event.results[i].isFinal) {
+            final += transcript
+          } else {
+            interim += transcript
+          }
+        }
+        setInterimText(interim || final)
+      }
+      
+      recognition.onerror = () => {}
+      recognitionRef.current = recognition
+      recognition.start()
+    } catch {}
+  }
+
+  // 실시간 음성인식 중지
+  function stopRealtimeSpeech() {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop() } catch {}
+      recognitionRef.current = null
+    }
+    setInterimText('')
   }
 
   // 녹음 (iOS 최적화: timeslice 사용)
@@ -93,6 +143,7 @@ export default function ChildPage() {
   // 웨이크워드 루프
   async function wakeLoop() {
     setState('listening')
+    startRealtimeSpeech() // 실시간 인식 시작
     while (runningRef.current && !inSessionRef.current) {
       const blob = await record(4)
       if (!blob || !runningRef.current) break
@@ -101,7 +152,9 @@ export default function ChildPage() {
         console.log('[웨이크 체크]', d)
         if (d.ok && d.transcript) {
           setLastHeard(d.transcript)
+          setInterimText('') // 인식 완료되면 interim 초기화
           if (isWake(d.transcript)) {
+            stopRealtimeSpeech()
             inSessionRef.current = true
             setState('speaking')
             setResponse('응! 뭐야?')
@@ -112,6 +165,7 @@ export default function ChildPage() {
         }
       } catch {}
     }
+    stopRealtimeSpeech()
   }
 
   // 대화 루프
@@ -124,7 +178,9 @@ export default function ChildPage() {
     
     while (runningRef.current && inSessionRef.current) {
       setState('recording')
+      startRealtimeSpeech() // 실시간 인식 시작
       const blob = await record(3)
+      stopRealtimeSpeech() // 녹음 끝나면 실시간 인식 중지
       if (!blob || !runningRef.current) break
       
       setState('processing')
@@ -133,6 +189,7 @@ export default function ChildPage() {
         if (!d.transcript) { resetTimer(); continue }
         
         setLastHeard(d.transcript)
+        setInterimText('') // 인식 완료되면 interim 초기화
         resetTimer()
         
         if (isBye(d.transcript)) {
@@ -179,6 +236,7 @@ export default function ChildPage() {
 
   useEffect(() => () => {
     runningRef.current = false
+    stopRealtimeSpeech()
     streamRef.current?.getTracks().forEach(t => t.stop())
   }, [])
 
@@ -202,7 +260,8 @@ export default function ChildPage() {
         <div className="text-9xl mb-8">😴</div>
         <h1 className="text-5xl font-bold text-purple-800 mb-4">아이야!</h1>
         <p className="text-2xl text-purple-600 mb-8">"아이야~" 불러봐!</p>
-        {lastHeard && <p className="text-gray-500">🎧 {lastHeard}</p>}
+        {interimText && <p className="text-2xl text-blue-600 animate-pulse mb-4">🎤 {interimText}</p>}
+        {lastHeard && !interimText && <p className="text-gray-500">🎧 {lastHeard}</p>}
         <button onClick={handleStop} className="fixed bottom-4 right-4 w-10 h-10 bg-gray-400/50 text-white rounded-full">✕</button>
       </main>
     )
@@ -217,7 +276,14 @@ export default function ChildPage() {
       <p className="text-purple-600 mb-4">
         {state === 'recording' ? '듣는 중...' : state === 'processing' ? '생각 중...' : '말하는 중...'}
       </p>
-      {lastHeard && <p className="bg-white/60 px-4 py-2 rounded-full mb-4">"{lastHeard}"</p>}
+      {/* 실시간 인식 텍스트 (녹음 중) */}
+      {interimText && state === 'recording' && (
+        <p className="text-2xl text-blue-600 animate-pulse mb-4 bg-white/60 px-4 py-2 rounded-full">
+          🎤 {interimText}
+        </p>
+      )}
+      {/* 최종 인식된 텍스트 */}
+      {lastHeard && !interimText && <p className="bg-white/60 px-4 py-2 rounded-full mb-4">"{lastHeard}"</p>}
       {response && <div className="bg-white p-6 rounded-3xl shadow-xl max-w-sm"><p className="text-xl font-bold">{response}</p></div>}
       <button onClick={handleStop} className="fixed bottom-4 right-4 w-10 h-10 bg-gray-400/50 text-white rounded-full">✕</button>
     </main>
