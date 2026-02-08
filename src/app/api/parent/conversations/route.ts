@@ -13,24 +13,19 @@ export async function GET(request: NextRequest) {
 
     const db = getDb()
 
-    const conversations = db.prepare(`
-      SELECT id, childId, type, text, audioUrl, timestamp
-      FROM conversations
-      WHERE childId = ?
-      ORDER BY timestamp DESC
-      LIMIT ? OFFSET ?
-    `).all(childId, limit, offset) as any[]
-
-    // timestamp를 ISO 형식으로 변환
-    const formatted = conversations.map(c => ({
-      ...c,
-      timestamp: c.timestamp,
-    }))
+    const result = await db.execute({
+      sql: `SELECT id, childId, type, text, audioUrl, timestamp
+        FROM conversations
+        WHERE childId = ?
+        ORDER BY timestamp DESC
+        LIMIT ? OFFSET ?`,
+      args: [childId, limit, offset]
+    })
 
     return NextResponse.json({
       ok: true,
-      conversations: formatted,
-      total: conversations.length,
+      conversations: result.rows,
+      total: result.rows.length,
     })
   } catch (error) {
     console.error('Conversations 조회 오류:', error)

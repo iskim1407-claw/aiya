@@ -1,22 +1,24 @@
-import Database from 'better-sqlite3'
-import path from 'path'
+import { createClient, Client } from '@libsql/client'
 
-const dbPath = process.env.DB_PATH || path.join(process.cwd(), 'data', 'aiya.db')
+let db: Client | null = null
 
-let db: Database.Database
-
-export function getDb(): Database.Database {
+export function getDb(): Client {
   if (!db) {
-    db = new Database(dbPath)
-    db.pragma('journal_mode = WAL')
+    db = createClient({
+      url: process.env.TURSO_DATABASE_URL || 'file:local.db',
+      authToken: process.env.TURSO_AUTH_TOKEN,
+    })
+    // 테이블 초기화는 비동기로 처리
     initDatabase()
   }
   return db
 }
 
-function initDatabase() {
+async function initDatabase() {
+  const client = db!
+  
   // 유저 테이블
-  db.exec(`
+  await client.execute(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -27,7 +29,7 @@ function initDatabase() {
   `)
 
   // 대화 기록 테이블
-  db.exec(`
+  await client.execute(`
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
       childId TEXT NOT NULL,
@@ -40,7 +42,7 @@ function initDatabase() {
   `)
 
   // 부모 설정 테이블
-  db.exec(`
+  await client.execute(`
     CREATE TABLE IF NOT EXISTS parentSettings (
       id TEXT PRIMARY KEY,
       childId TEXT NOT NULL UNIQUE,

@@ -49,5 +49,17 @@ db.exec(`
   )
 `)
 
+// 초기 사용자 데이터 삽입
+db.exec(`
+  INSERT OR IGNORE INTO users (id, name, role) VALUES
+  ('default-child', '아이', 'child');
+`)
+
+// 초기 부모 설정 삽입
+db.exec(`
+  INSERT OR IGNORE INTO parentSettings (id, childId, dailyLimitMinutes, allowedStartTime, allowedEndTime)
+  VALUES ('parent-default', 'default-child', 60, '09:00', '20:00');
+`)
+
 console.log('✅ 데이터베이스 초기화 완료')
 db.close()

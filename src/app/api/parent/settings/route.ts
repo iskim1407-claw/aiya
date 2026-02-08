@@ -14,20 +14,21 @@ export async function POST(request: NextRequest) {
     const db = getDb()
     const settingsId = uuidv4()
 
-    db.prepare(`
-      INSERT OR REPLACE INTO parentSettings 
-      (id, childId, dailyLimitMinutes, allowedStartTime, allowedEndTime, enabledCategories, voicePreference, enabled)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      settingsId,
-      childId,
-      body.dailyLimitMinutes || 60,
-      body.allowedHours?.startTime || '09:00',
-      body.allowedHours?.endTime || '20:00',
-      (body.enabledCategories || ['education', 'play', 'emotion', 'habits']).join(','),
-      body.voicePreference || 'mom',
-      true
-    )
+    await db.execute({
+      sql: `INSERT OR REPLACE INTO parentSettings 
+        (id, childId, dailyLimitMinutes, allowedStartTime, allowedEndTime, enabledCategories, voicePreference, enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        settingsId,
+        childId,
+        body.dailyLimitMinutes || 60,
+        body.allowedHours?.startTime || '09:00',
+        body.allowedHours?.endTime || '20:00',
+        (body.enabledCategories || ['education', 'play', 'emotion', 'habits']).join(','),
+        body.voicePreference || 'mom',
+        1
+      ]
+    })
 
     return NextResponse.json({ ok: true, settingsId })
   } catch (error) {
@@ -48,13 +49,14 @@ export async function GET(request: NextRequest) {
     const childId = request.nextUrl.searchParams.get('childId') || 'default-child'
     const db = getDb()
 
-    const settings = db.prepare(`
-      SELECT * FROM parentSettings WHERE childId = ?
-    `).get(childId)
+    const result = await db.execute({
+      sql: 'SELECT * FROM parentSettings WHERE childId = ?',
+      args: [childId]
+    })
 
     return NextResponse.json({
       ok: true,
-      settings,
+      settings: result.rows[0] || null,
     })
   } catch (error) {
     console.error('Settings 조회 오류:', error)

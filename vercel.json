@@ -1,21 +1,5 @@
 {
-  "name": "아이야 (AiYa)",
-  "version": 2,
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/next"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "/"
-    }
-  ],
-  "env": {
-    "NODE_ENV": "production"
-  },
+  "framework": "nextjs",
   "buildCommand": "npm run build",
   "outputDirectory": ".next"
 }
