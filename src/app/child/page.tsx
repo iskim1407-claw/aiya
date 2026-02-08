@@ -23,36 +23,52 @@ export default function ChildPage() {
     stateRef.current = newState
   }, [])
 
-  // TTS
+  // TTS (5초 타임아웃으로 stuck 방지)
   const speak = useCallback((text: string, audioData?: string, onEnd?: () => void) => {
     if (typeof window === 'undefined') { onEnd?.(); return }
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null }
     window.speechSynthesis?.cancel()
+    
+    let finished = false
+    const finish = () => {
+      if (finished) return
+      finished = true
+      onEnd?.()
+    }
+    
+    // 5초 후 강제 진행 (stuck 방지)
+    const timeout = setTimeout(() => {
+      console.log('[TTS 타임아웃 - 강제 진행]')
+      finish()
+    }, 5000)
+    
+    const done = () => {
+      clearTimeout(timeout)
+      finish()
+    }
     
     console.log('[TTS]', text, audioData ? '(OpenAI)' : '(브라우저)')
     
     if (audioData) {
       const audio = new Audio(audioData)
       audioRef.current = audio
-      audio.onended = () => { console.log('[Audio 완료]'); onEnd?.() }
-      audio.onerror = (e) => { console.log('[Audio 에러]', e); speakFallback(text, onEnd) }
+      audio.onended = () => { console.log('[Audio 완료]'); done() }
+      audio.onerror = (e) => { console.log('[Audio 에러]', e); done() }
       audio.play()
         .then(() => console.log('[Audio 재생 시작]'))
-        .catch((e) => { console.log('[Audio 재생 실패]', e); speakFallback(text, onEnd) })
+        .catch((e) => { console.log('[Audio 재생 실패]', e); done() })
       return
     }
-    speakFallback(text, onEnd)
-  }, [])
-
-  const speakFallback = (text: string, onEnd?: () => void) => {
+    
+    // 브라우저 TTS fallback
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = 'ko-KR'
     utterance.rate = 0.9
     utterance.pitch = 1.2
-    utterance.onend = () => onEnd?.()
-    utterance.onerror = () => onEnd?.()
+    utterance.onend = () => done()
+    utterance.onerror = () => done()
     window.speechSynthesis.speak(utterance)
-  }
+  }, [])
 
   // 작별 인사 체크
   const isGoodbye = (text: string): boolean => {
