@@ -222,25 +222,30 @@ export default function ChildPage() {
     recognition.lang = 'ko-KR'
     recognitionRef.current = recognition
 
-    const wakeWords = ['아이야', '아이얌', '아이아', '아이여', '애야']
+    // 더 많은 변형 추가
+    const wakeWords = ['아이야', '아이얌', '아이아', '아이여', '애야', '이야', '아야', '아이', '야야']
 
     recognition.onresult = (event: any) => {
       if (stateRef.current !== 'waiting') return
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript.toLowerCase()
+        const transcript = event.results[i][0].transcript
+        const lower = transcript.toLowerCase().replace(/\s/g, '')
         
-        if (wakeWords.some(w => transcript.includes(w))) {
+        // 디버그용 - 뭘 듣고 있는지 표시
+        setLastHeard(transcript)
+        
+        if (wakeWords.some(w => lower.includes(w))) {
           console.log('[웨이크 워드 감지!]', transcript)
           recognition.stop()
           
           // 세션 시작
           updateSession(true)
           updateState('speaking')
+          setLastHeard('')
           
           speak('응! 뭐야?', undefined, () => {
             updateState('listening')
-            setLastHeard('')
             resetSessionTimer()
             startSessionListening()
           })
@@ -258,6 +263,7 @@ export default function ChildPage() {
     }
 
     recognition.onerror = (event: any) => {
+      console.log('[웨이크 워드 오류]', event.error)
       if (event.error !== 'not-allowed' && stateRef.current === 'waiting') {
         setTimeout(() => {
           try { recognition.start() } catch (e) {}
@@ -323,7 +329,7 @@ export default function ChildPage() {
         )}
       </div>
 
-      {lastHeard && state === 'listening' && (
+      {lastHeard && (state === 'listening' || state === 'waiting') && (
         <div className="mb-4 px-5 py-2 bg-white/60 rounded-full text-gray-700 text-lg">
           🎧 "{lastHeard}"
         </div>
