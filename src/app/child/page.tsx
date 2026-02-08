@@ -2,234 +2,235 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 
+type State = 'waiting' | 'listening' | 'thinking' | 'speaking'
+
 export default function ChildPage() {
-  const [isProcessing, setIsProcessing] = useState(false)
+  const [state, setState] = useState<State>('waiting')
   const [response, setResponse] = useState('')
   const [lastHeard, setLastHeard] = useState('')
-  const [status, setStatus] = useState('시작 중...')
   const recognitionRef = useRef<any>(null)
-  const isProcessingRef = useRef(false)
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null)
-  const lastFinalRef = useRef('')
+  const listeningRecognitionRef = useRef<any>(null)
+  const stateRef = useRef<State>('waiting')
 
-  // TTS + 끝나면 콜백
+  // 상태 업데이트
+  const updateState = useCallback((newState: State) => {
+    setState(newState)
+    stateRef.current = newState
+  }, [])
+
+  // TTS
   const speak = useCallback((text: string, onEnd?: () => void) => {
     if (typeof window === 'undefined') return
-    
     window.speechSynthesis.cancel()
     
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = 'ko-KR'
     utterance.rate = 0.9
     utterance.pitch = 1.2
-    utterance.volume = 1.0
-
+    
     const voices = window.speechSynthesis.getVoices()
     const koVoice = voices.find(v => v.lang.includes('ko'))
     if (koVoice) utterance.voice = koVoice
 
-    utterance.onend = () => {
-      console.log('[TTS 끝]')
-      if (onEnd) onEnd()
-    }
-
-    utterance.onerror = () => {
-      console.log('[TTS 에러]')
-      if (onEnd) onEnd()
-    }
-
+    utterance.onend = () => onEnd?.()
+    utterance.onerror = () => onEnd?.()
+    
     window.speechSynthesis.speak(utterance)
-  }, [])
-
-  // 음성 인식 시작
-  const startListening = useCallback(() => {
-    if (recognitionRef.current && !isProcessingRef.current) {
-      try {
-        recognitionRef.current.start()
-        setStatus('🎤 듣고 있어요')
-        console.log('[듣기 시작]')
-      } catch (e) {
-        // 이미 시작됨
-      }
-    }
-  }, [])
-
-  // 음성 인식 중지
-  const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop()
-        console.log('[듣기 중지]')
-      } catch (e) {}
-    }
   }, [])
 
   // API 호출
   const callAPI = useCallback(async (text: string) => {
-    if (isProcessingRef.current || !text.trim()) return
+    updateState('thinking')
     
-    isProcessingRef.current = true
-    setIsProcessing(true)
-    setStatus('💭 생각 중...')
-    
-    // 듣기 중지 (TTS 소리 안 듣도록)
-    stopListening()
-
     try {
       const res = await fetch('/api/talk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: text.trim() }),
+        body: JSON.stringify({ text }),
       })
-
       const data = await res.json()
       const message = data.ok ? data.message : '다시 말해줄래?'
       
       setResponse(message)
-      setIsProcessing(false)
-      setStatus('🔊 말하는 중...')
+      updateState('speaking')
       
-      // TTS 재생, 끝나면 다시 듣기 시작
       speak(message, () => {
-        isProcessingRef.current = false
-        lastFinalRef.current = ''
+        // TTS 끝나면 다시 대기 상태
+        updateState('waiting')
         setLastHeard('')
-        startListening()
+        startWakeWordListening()
       })
-
     } catch (error) {
       console.error('API 오류:', error)
       setResponse('잠깐, 다시 해볼까?')
-      setIsProcessing(false)
-      isProcessingRef.current = false
-      startListening()
+      updateState('waiting')
+      startWakeWordListening()
     }
-  }, [speak, stopListening, startListening])
+  }, [speak, updateState])
 
-  // 텍스트에서 웨이크 워드 제거
-  const cleanText = (text: string): string => {
-    const patterns = ['아이야', '아이얌', '아이아', '아이여', '애야', '이야', '아야']
-    let result = text
-    for (const p of patterns) {
-      result = result.replace(new RegExp(p, 'gi'), '').trim()
-    }
-    return result || text
-  }
+  // 실제 질문 듣기 (웨이크 워드 후)
+  const startRealListening = useCallback(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SpeechRecognition) return
 
-  useEffect(() => {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition
-
-    if (!SpeechRecognition) {
-      setStatus('❌ 음성 인식 미지원')
-      return
+    // 웨이크 워드 인식 중지
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop() } catch (e) {}
     }
 
-    // TTS 음성 로드
-    window.speechSynthesis.getVoices()
-    window.speechSynthesis.onvoiceschanged = () => {
-      window.speechSynthesis.getVoices()
+    updateState('listening')
+    setLastHeard('')
+    setResponse('')
+
+    const recognition = new SpeechRecognition()
+    recognition.continuous = false
+    recognition.interimResults = true
+    recognition.lang = 'ko-KR'
+    listeningRecognitionRef.current = recognition
+
+    let finalText = ''
+    let silenceTimer: NodeJS.Timeout | null = null
+
+    recognition.onresult = (event: any) => {
+      let interim = ''
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        if (event.results[i].isFinal) {
+          finalText += event.results[i][0].transcript
+        } else {
+          interim += event.results[i][0].transcript
+        }
+      }
+      setLastHeard(finalText || interim)
+      
+      // 말 끝나면 1.5초 후 API 호출
+      if (finalText) {
+        if (silenceTimer) clearTimeout(silenceTimer)
+        silenceTimer = setTimeout(() => {
+          recognition.stop()
+        }, 1500)
+      }
     }
+
+    recognition.onend = () => {
+      if (finalText.trim()) {
+        callAPI(finalText.trim())
+      } else {
+        // 아무것도 안 들리면 다시 대기
+        updateState('waiting')
+        startWakeWordListening()
+      }
+    }
+
+    recognition.onerror = (event: any) => {
+      console.log('[듣기 오류]', event.error)
+      updateState('waiting')
+      startWakeWordListening()
+    }
+
+    recognition.start()
+  }, [callAPI, updateState])
+
+  // 웨이크 워드 감지
+  const startWakeWordListening = useCallback(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SpeechRecognition) return
 
     const recognition = new SpeechRecognition()
     recognition.continuous = true
     recognition.interimResults = true
     recognition.lang = 'ko-KR'
-
     recognitionRef.current = recognition
 
+    const wakeWords = ['아이야', '아이얌', '아이아', '아이여', '애야']
+
     recognition.onresult = (event: any) => {
-      if (isProcessingRef.current) return  // 처리 중이면 무시
-      
-      let finalTranscript = ''
-      let interimTranscript = ''
+      if (stateRef.current !== 'waiting') return
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript
-        } else {
-          interimTranscript += transcript
-        }
-      }
-
-      const currentText = finalTranscript || interimTranscript
-      if (currentText) {
-        setLastHeard(currentText)
-      }
-
-      if (finalTranscript) {
-        lastFinalRef.current = finalTranscript
+        const transcript = event.results[i][0].transcript.toLowerCase()
         
-        if (silenceTimerRef.current) {
-          clearTimeout(silenceTimerRef.current)
+        if (wakeWords.some(w => transcript.includes(w))) {
+          console.log('[웨이크 워드 감지!]', transcript)
+          recognition.stop()
+          
+          // 확인 소리
+          speak('응?', () => {
+            startRealListening()
+          })
+          return
         }
-        
-        // 1초 후 API 호출
-        silenceTimerRef.current = setTimeout(() => {
-          if (lastFinalRef.current && !isProcessingRef.current) {
-            const cleaned = cleanText(lastFinalRef.current)
-            console.log('[API 호출]', cleaned)
-            callAPI(cleaned)
-          }
-        }, 1000)
-      }
-    }
-
-    recognition.onerror = (event: any) => {
-      console.log('[오류]', event.error)
-      if (event.error === 'not-allowed') {
-        setStatus('🔒 마이크 권한 필요')
-        return
-      }
-      if (!isProcessingRef.current) {
-        setTimeout(startListening, 1000)
       }
     }
 
     recognition.onend = () => {
-      console.log('[인식 종료]')
-      // 처리 중이 아닐 때만 재시작
-      if (!isProcessingRef.current) {
-        setTimeout(startListening, 300)
+      // 대기 상태면 재시작
+      if (stateRef.current === 'waiting') {
+        setTimeout(() => {
+          try { recognition.start() } catch (e) {}
+        }, 300)
       }
     }
 
-    // 마이크 권한 요청
+    recognition.onerror = (event: any) => {
+      if (event.error !== 'not-allowed' && stateRef.current === 'waiting') {
+        setTimeout(() => {
+          try { recognition.start() } catch (e) {}
+        }, 1000)
+      }
+    }
+
+    try { recognition.start() } catch (e) {}
+  }, [speak, startRealListening])
+
+  // 초기화
+  useEffect(() => {
+    window.speechSynthesis.getVoices()
+    
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then(() => {
-        recognition.start()
-        setStatus('🎤 듣고 있어요')
+        updateState('waiting')
+        startWakeWordListening()
       })
       .catch((err) => {
         console.error('[마이크 권한 거부]', err)
-        setStatus('🔒 마이크 권한 필요')
       })
 
     return () => {
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current)
-      try { recognition.stop() } catch (e) {}
+      if (recognitionRef.current) try { recognitionRef.current.stop() } catch (e) {}
+      if (listeningRecognitionRef.current) try { listeningRecognitionRef.current.stop() } catch (e) {}
     }
-  }, [callAPI, startListening])
+  }, [startWakeWordListening, updateState])
+
+  const statusText = {
+    waiting: '💤 "아이야~" 라고 불러봐!',
+    listening: '🎤 듣고 있어요!',
+    thinking: '💭 생각 중...',
+    speaking: '🔊 말하는 중...',
+  }
+
+  const statusColor = {
+    waiting: 'bg-purple-500',
+    listening: 'bg-green-500',
+    thinking: 'bg-yellow-400 text-gray-800',
+    speaking: 'bg-blue-500',
+  }
 
   return (
     <main className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200">
       <div className="text-center mb-6">
-        <div className={`text-8xl mb-4 ${isProcessing ? 'animate-pulse' : 'animate-bounce'}`}>
-          {isProcessing ? '🤔' : status.includes('말하는') ? '🗣️' : '🎤'}
+        <div className={`text-8xl mb-4 ${state === 'listening' ? 'animate-bounce' : state === 'thinking' ? 'animate-pulse' : ''}`}>
+          {state === 'waiting' ? '😴' : state === 'listening' ? '👂' : state === 'thinking' ? '🤔' : '🗣️'}
         </div>
         <h1 className="text-5xl font-bold text-purple-800 mb-3">아이야!</h1>
-        <p className="text-xl text-purple-600">뭐든 말해봐!</p>
       </div>
 
-      {lastHeard && !status.includes('말하는') && (
-        <div className="mb-4 px-5 py-2 bg-white/60 rounded-full text-gray-700 text-lg max-w-xs text-center">
+      {lastHeard && state === 'listening' && (
+        <div className="mb-4 px-5 py-2 bg-white/60 rounded-full text-gray-700 text-lg">
           🎧 "{lastHeard}"
         </div>
       )}
 
-      {response && (
+      {response && (state === 'speaking' || state === 'waiting') && (
         <div className="mt-2 p-6 bg-white rounded-3xl shadow-xl max-w-sm text-center">
           <p className="text-2xl text-gray-800 leading-relaxed font-bold">
             {response}
@@ -237,20 +238,15 @@ export default function ChildPage() {
         </div>
       )}
 
-      {isProcessing && (
+      {state === 'thinking' && (
         <div className="mt-6">
           <div className="animate-spin rounded-full h-14 w-14 border-4 border-purple-300 border-t-purple-600"></div>
         </div>
       )}
 
       <div className="fixed bottom-4 left-4 right-4 flex justify-center">
-        <div className={`px-5 py-2 rounded-full text-base font-semibold shadow-lg ${
-          status.includes('생각') ? 'bg-yellow-400 text-gray-800' :
-          status.includes('말하는') ? 'bg-blue-500 text-white' :
-          status.includes('듣고') ? 'bg-green-500 text-white' :
-          'bg-red-400 text-white'
-        }`}>
-          {status}
+        <div className={`px-5 py-3 rounded-full text-lg font-semibold shadow-lg text-white ${statusColor[state]}`}>
+          {statusText[state]}
         </div>
       </div>
     </main>
