@@ -74,25 +74,39 @@ export default function ChildPage() {
     })
   }, [])
 
-  // TTS
-  const speak = useCallback((text: string, onEnd?: () => void) => {
+  // TTS (OpenAI audio 또는 fallback)
+  const speak = useCallback((text: string, audioData?: string, onEnd?: () => void) => {
     if (typeof window === 'undefined') return
-    window.speechSynthesis.cancel()
     
+    // OpenAI audio가 있으면 사용
+    if (audioData) {
+      const audio = new Audio(audioData)
+      audio.onended = () => onEnd?.()
+      audio.onerror = () => {
+        // 실패시 브라우저 TTS fallback
+        speakFallback(text, onEnd)
+      }
+      audio.play().catch(() => speakFallback(text, onEnd))
+      return
+    }
+    
+    // Fallback: 브라우저 TTS
+    speakFallback(text, onEnd)
+  }, [])
+
+  const speakFallback = (text: string, onEnd?: () => void) => {
+    window.speechSynthesis.cancel()
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = 'ko-KR'
     utterance.rate = 0.9
     utterance.pitch = 1.2
-    
     const voices = window.speechSynthesis.getVoices()
     const koVoice = voices.find(v => v.lang.includes('ko'))
     if (koVoice) utterance.voice = koVoice
-
     utterance.onend = () => onEnd?.()
     utterance.onerror = () => onEnd?.()
-    
     window.speechSynthesis.speak(utterance)
-  }, [])
+  }
 
   // API 호출
   const callAPI = useCallback(async (text: string) => {
@@ -106,11 +120,12 @@ export default function ChildPage() {
       })
       const data = await res.json()
       const message = data.ok ? data.message : '다시 말해줄래?'
+      const audio = data.audio  // OpenAI TTS audio
       
       setResponse(message)
       updateState('speaking')
       
-      speak(message, () => {
+      speak(message, audio, () => {
         // 세션 유지 - 다시 듣기 상태로
         updateState('listening')
         resetSessionTimer()

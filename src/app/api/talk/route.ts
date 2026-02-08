@@ -28,12 +28,11 @@ export async function POST(request: NextRequest) {
     const apiKey = process.env.OPENAI_API_KEY
     
     if (!apiKey) {
-      // API 키 없으면 키워드 기반 fallback
       return NextResponse.json({ ok: true, message: getKeywordResponse(userText) })
     }
 
-    // OpenAI API 호출
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    // 1. GPT로 텍스트 응답 생성
+    const chatResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -50,16 +49,45 @@ export async function POST(request: NextRequest) {
       }),
     })
 
-    if (!response.ok) {
-      const error = await response.text()
-      console.error('[OpenAI Error]', error)
+    if (!chatResponse.ok) {
+      console.error('[GPT Error]', await chatResponse.text())
       return NextResponse.json({ ok: true, message: getKeywordResponse(userText) })
     }
 
-    const data = await response.json()
-    const aiMessage = data.choices?.[0]?.message?.content?.trim() || getKeywordResponse(userText)
+    const chatData = await chatResponse.json()
+    const aiMessage = chatData.choices?.[0]?.message?.content?.trim() || getKeywordResponse(userText)
 
-    return NextResponse.json({ ok: true, message: aiMessage })
+    // 2. OpenAI TTS로 음성 생성
+    const ttsResponse = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'tts-1',
+        input: aiMessage,
+        voice: 'nova',  // 밝고 친근한 음성
+        response_format: 'mp3',
+        speed: 1.0,
+      }),
+    })
+
+    if (!ttsResponse.ok) {
+      console.error('[TTS Error]', await ttsResponse.text())
+      // TTS 실패해도 텍스트는 반환
+      return NextResponse.json({ ok: true, message: aiMessage })
+    }
+
+    // 3. Audio를 base64로 변환
+    const audioBuffer = await ttsResponse.arrayBuffer()
+    const audioBase64 = Buffer.from(audioBuffer).toString('base64')
+
+    return NextResponse.json({ 
+      ok: true, 
+      message: aiMessage,
+      audio: `data:audio/mp3;base64,${audioBase64}`
+    })
 
   } catch (error: any) {
     console.error('[API Error]', error)
@@ -67,17 +95,11 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// 키워드 기반 fallback
 function getKeywordResponse(text: string): string {
   const t = text.toLowerCase()
-  
   if (t.includes('안녕')) return '안녕! 오늘 기분이 어때?'
   if (t.includes('누구')) return '나는 아이야! 네 친구야!'
-  if (t.includes('이름')) return '내 이름은 아이야야!'
   if (t.includes('심심')) return '심심해? 같이 놀까?'
   if (t.includes('노래')) return '반짝반짝 작은별~ 아름답게 비치네~'
-  if (t.includes('사랑')) return '나도 좋아해!'
-  if (t.includes('고마')) return '천만에!'
-  
   return '응! 더 말해줘!'
 }
