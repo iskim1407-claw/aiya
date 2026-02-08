@@ -177,19 +177,32 @@ export default function ChildPage() {
 
   // 시작 버튼
   const handleStart = useCallback(async () => {
-    // 오디오 unlock
-    const silentAudio = new Audio('data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYoRwmHAAAAAAD/+9DEAAAIAANIAAAAgAAA0gAAABBMTEhJSWBgYGBgVFRVRcXFxMTExcXFhYWFkZGRpaWloKChsbGxqamprq6utra2u7u7wcHBxsbGy8vL0dHR1tbW3Nzc4eHh5ubm7Ozs8fHx9vb2+/v7//8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//tQxAADwAADSAAAAAIAA0gAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')
-    try { await silentAudio.play() } catch (e) {}
+    console.log('[시작 버튼 클릭]')
+    setResponse('시작 중...')
     
-    const utterance = new SpeechSynthesisUtterance('')
-    window.speechSynthesis?.speak(utterance)
-    
-    autoRestartRef.current = true
-    
-    // 인사하고 녹음 시작
-    speak('응! 뭐야?', undefined, () => {
-      startRecording()
-    })
+    try {
+      // 오디오 unlock
+      const silentAudio = new Audio('data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYoRwmHAAAAAAD/+9DEAAAIAANIAAAAgAAA0gAAABBMTEhJSWBgYGBgVFRVRcXFxMTExcXFhYWFkZGRpaWloKChsbGxqamprq6utra2u7u7wcHBxsbGy8vL0dHR1tbW3Nzc4eHh5ubm7Ozs8fHx9vb2+/v7//8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//tQxAADwAADSAAAAAIAA0gAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')
+      try { await silentAudio.play() } catch (e) { console.log('[Audio unlock 실패]', e) }
+      
+      window.speechSynthesis?.cancel()
+      
+      // 마이크 권한 요청
+      console.log('[마이크 권한 요청]')
+      streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true })
+      console.log('[마이크 권한 성공]')
+      
+      autoRestartRef.current = true
+      setResponse('')
+      
+      // 인사하고 녹음 시작
+      speak('응! 뭐야?', undefined, () => {
+        startRecording()
+      })
+    } catch (e: any) {
+      console.error('[시작 에러]', e)
+      setResponse('마이크 권한이 필요해요! 🎤')
+    }
   }, [speak, startRecording])
 
   // 정지 버튼
