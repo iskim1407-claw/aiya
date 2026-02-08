@@ -227,19 +227,20 @@ export default function ChildPage() {
     }
   }, [])
 
-  // 시작 화면
+  // 시작 화면 - 화면 아무데나 터치하면 시작
   if (state === 'init') {
     return (
-      <main className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200">
+      <main 
+        onClick={handleStart}
+        className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200 cursor-pointer active:bg-pink-300 transition-colors"
+      >
         <div className="text-9xl mb-8 animate-bounce">🤗</div>
         <h1 className="text-5xl font-bold text-purple-800 mb-4">아이야!</h1>
-        <p className="text-xl text-purple-600 mb-8">AI 친구와 대화해요</p>
-        <button
-          onClick={handleStart}
-          className="px-12 py-6 bg-gradient-to-r from-pink-500 to-purple-500 text-white text-3xl font-bold rounded-full shadow-2xl active:scale-95 transition-transform"
-        >
-          🎤 대화하기
-        </button>
+        {response ? (
+          <p className="text-xl text-red-500 mb-8">{response}</p>
+        ) : (
+          <p className="text-2xl text-purple-600 mb-8 animate-pulse">화면을 터치해요! 👆</p>
+        )}
       </main>
     )
   }
@@ -274,11 +275,12 @@ export default function ChildPage() {
         </div>
       )}
 
+      {/* 부모용 끝내기 - 우측 하단 작게 */}
       <button
         onClick={handleStop}
-        className="fixed bottom-8 px-8 py-4 bg-red-400 text-white text-xl font-bold rounded-full shadow-lg active:scale-95 transition-transform"
+        className="fixed bottom-4 right-4 px-3 py-2 bg-gray-400/50 text-white text-sm rounded-full"
       >
-        👋 끝내기
+        ✕
       </button>
     </main>
   )
