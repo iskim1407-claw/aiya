@@ -37,26 +37,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: false, error: 'API 키 없음' }, { status: 500 })
     }
 
-    // 1. Whisper STT
-    const whisperForm = new FormData()
-    whisperForm.append('file', audioFile)
-    whisperForm.append('model', 'whisper-1')
-    whisperForm.append('language', 'ko')
-    whisperForm.append('temperature', '0')  // hallucination 줄이기
+    // 1. 로컬 Whisper STT (faster-whisper large-v3-turbo)
+    const localSttUrl = process.env.LOCAL_STT_URL || 'https://therefore-jesus-feof-salaries.trycloudflare.com'
+    
+    const sttForm = new FormData()
+    sttForm.append('audio', audioFile)
 
-    const sttRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    const sttRes = await fetch(`${localSttUrl}/transcribe`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}` },
-      body: whisperForm,
+      body: sttForm,
     })
 
     if (!sttRes.ok) {
-      console.error('[Whisper Error]', await sttRes.text())
+      console.error('[Local STT Error]', await sttRes.text())
       return NextResponse.json({ ok: false, error: 'STT 실패' })
     }
 
     const sttData = await sttRes.json()
-    let transcript = sttData.text?.trim() || ''
+    
+    if (!sttData.ok || !sttData.transcript) {
+      return NextResponse.json({ ok: false, error: '인식 안됨' })
+    }
+    
+    let transcript = sttData.transcript.trim()
 
     // Whisper hallucination 필터링 (무음일 때 나오는 가짜 텍스트)
     const hallucinations = ['뉴스', 'MBC', 'KBS', 'SBS', '기자', '열어보기', '시청', '감사합니다', '구독', '좋아요']
@@ -69,7 +72,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: false, error: '인식 안됨' })
     }
 
-    console.log('[Whisper]', transcript)
+    console.log('[Local Whisper]', transcript)
 
     // 2. GPT 응답
     const messages = [
