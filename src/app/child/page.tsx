@@ -140,27 +140,15 @@ export default function ChildPage() {
     }
   }
 
-  // 시작
+  // 시작 - 바로 마이크 권한 요청
   async function handleStart() {
-    setDebugMsg('마이크 권한 요청 중...')
     try {
-      // 타임아웃 10초
-      const timeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('시간 초과 - 마이크 권한 팝업 확인!')), 10000)
-      )
-      
-      const getMic = navigator.mediaDevices.getUserMedia({ audio: true })
-      streamRef.current = await Promise.race([getMic, timeout]) as MediaStream
-      
-      // 오디오 unlock
-      const a = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=')
-      await a.play().catch(() => {})
-      
+      // 마이크 권한 즉시 요청
+      streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true })
       runningRef.current = true
       wakeLoop()
     } catch (e: any) {
-      console.error('에러:', e)
-      setDebugMsg(e.message || '마이크 권한 거부됨')
+      setDebugMsg('마이크 권한을 허용해주세요!')
     }
   }
 
@@ -184,7 +172,11 @@ export default function ChildPage() {
       <main onClick={handleStart} className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200 cursor-pointer">
         <div className="text-9xl mb-8 animate-bounce">🤗</div>
         <h1 className="text-5xl font-bold text-purple-800 mb-4">아이야!</h1>
-        <p className="text-2xl text-purple-600 mb-8 animate-pulse">{debugMsg || '화면을 터치해요! 👆'}</p>
+        {debugMsg ? (
+          <p className="text-xl text-red-500 mb-8">{debugMsg}</p>
+        ) : (
+          <p className="text-2xl text-purple-600 mb-8 animate-pulse">터치하면 시작! 👆</p>
+        )}
       </main>
     )
   }
