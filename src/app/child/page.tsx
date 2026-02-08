@@ -142,16 +142,20 @@ export default function ChildPage() {
 
   // 시작
   async function handleStart() {
-    setDebugMsg('마이크 준비 중...')
+    setDebugMsg('오디오 준비...')
     try {
       const a = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=')
       await a.play().catch(() => {})
+      
+      setDebugMsg('마이크 요청...')
       streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true })
+      
+      setDebugMsg('시작!')
       runningRef.current = true
-      setDebugMsg('')
       wakeLoop()
-    } catch {
-      setDebugMsg('마이크 권한 필요!')
+    } catch (e: any) {
+      console.error('마이크 에러:', e)
+      setDebugMsg(`에러: ${e.name || e.message || '권한 거부'}`)
     }
   }
 
