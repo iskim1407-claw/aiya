@@ -1,63 +1,91 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { speakText } from '@/components/AudioPlayer'
 
 export default function ChildPage() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [response, setResponse] = useState('')
   const [lastHeard, setLastHeard] = useState('')
+  const [status, setStatus] = useState('시작 중...')
   const recognitionRef = useRef<any>(null)
   const isProcessingRef = useRef(false)
+
+  // TTS 함수
+  const speak = useCallback((text: string) => {
+    if (typeof window === 'undefined') return
+    
+    window.speechSynthesis.cancel()
+    
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.lang = 'ko-KR'
+    utterance.rate = 0.9  // 조금 느리게 (아이용)
+    utterance.pitch = 1.2  // 약간 높게 (친근하게)
+    utterance.volume = 1.0
+
+    // 음성 로드 후 시작
+    const voices = window.speechSynthesis.getVoices()
+    const koVoice = voices.find(v => v.lang.includes('ko'))
+    if (koVoice) {
+      utterance.voice = koVoice
+    }
+
+    window.speechSynthesis.speak(utterance)
+  }, [])
 
   // API 호출
   const callAPI = useCallback(async (text: string) => {
     if (isProcessingRef.current) return
     isProcessingRef.current = true
     setIsProcessing(true)
+    setStatus('💭 생각 중...')
     setResponse('')
 
     try {
       const res = await fetch('/api/talk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: text.trim(),
-          childId: 'default-child',
-        }),
+        body: JSON.stringify({ text }),
       })
 
       const data = await res.json()
 
       if (data.ok) {
         setResponse(data.message)
-        speakText(data.message)
+        // 🔊 음성으로 응답
+        speak(data.message)
       } else {
-        setResponse('다시 말해볼까?')
+        const errorMsg = '다시 말해줄래?'
+        setResponse(errorMsg)
+        speak(errorMsg)
       }
     } catch (error) {
       console.error('API 오류:', error)
-      setResponse('연결 오류! 다시 해볼까?')
+      const errorMsg = '잠깐만, 다시 해볼까?'
+      setResponse(errorMsg)
+      speak(errorMsg)
     } finally {
       setIsProcessing(false)
       isProcessingRef.current = false
+      setStatus('🎤 듣고 있어요')
     }
-  }, [])
+  }, [speak])
 
   // 웨이크 워드 체크
   const checkWakeWord = useCallback((text: string): string | null => {
     const lower = text.toLowerCase().replace(/\s/g, '')
-    const wakePatterns = [
-      '아이야', '아이얌', '아이아', '아이여', '애야', 
-      '이야', '아야', 'aiya', 'aiya'
-    ]
+    const wakePatterns = ['아이야', '아이얌', '아이아', '아이여', '애야', '이야', '아야']
     
     for (const pattern of wakePatterns) {
-      const idx = lower.indexOf(pattern)
-      if (idx !== -1) {
-        // 웨이크 워드 이후 텍스트 반환
-        const afterWake = text.substring(idx + pattern.length).trim()
-        return afterWake || '안녕'  // 빈 문자열이면 기본 인사
+      if (lower.includes(pattern)) {
+        // 웨이크 워드 이후 텍스트
+        const idx = lower.indexOf(pattern)
+        let afterWake = text.substring(idx + pattern.length).trim()
+        
+        // 웨이크 워드만 말한 경우 → 기본 인사
+        if (!afterWake || afterWake.length < 2) {
+          return '안녕'
+        }
+        return afterWake
       }
     }
     return null
@@ -69,9 +97,13 @@ export default function ChildPage() {
       (window as any).webkitSpeechRecognition
 
     if (!SpeechRecognition) {
-      setResponse('이 브라우저는 음성 인식을 지원하지 않아요 😢')
+      setStatus('❌ 음성 인식 미지원')
+      setResponse('이 브라우저는 음성 인식을 지원하지 않아요')
       return
     }
+
+    // 음성 목록 로드 (TTS용)
+    window.speechSynthesis.getVoices()
 
     const recognition = new SpeechRecognition()
     recognition.continuous = true
@@ -82,8 +114,8 @@ export default function ChildPage() {
     recognitionRef.current = recognition
 
     recognition.onresult = (event: any) => {
-      let interimTranscript = ''
       let finalTranscript = ''
+      let interimTranscript = ''
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript
@@ -97,14 +129,13 @@ export default function ChildPage() {
       const currentText = finalTranscript || interimTranscript
       if (currentText) {
         setLastHeard(currentText)
-        console.log('[들림]', currentText)
       }
 
       // 최종 결과에서 웨이크 워드 체크
       if (finalTranscript && !isProcessingRef.current) {
         const afterWake = checkWakeWord(finalTranscript)
         if (afterWake !== null) {
-          console.log('[웨이크 워드 감지!]', finalTranscript, '→', afterWake)
+          console.log('[웨이크 워드 감지]', finalTranscript, '→', afterWake)
           callAPI(afterWake)
         }
       }
@@ -112,19 +143,23 @@ export default function ChildPage() {
 
     recognition.onerror = (event: any) => {
       console.log('[음성 인식 오류]', event.error)
-      // 자동 재시작
-      if (event.error !== 'not-allowed') {
-        setTimeout(() => {
-          try { recognition.start() } catch (e) {}
-        }, 1000)
+      if (event.error === 'not-allowed') {
+        setStatus('🔒 마이크 권한 필요')
+        return
       }
+      // 자동 재시작
+      setTimeout(() => {
+        try { recognition.start() } catch (e) {}
+      }, 1000)
     }
 
     recognition.onend = () => {
-      console.log('[음성 인식 종료, 재시작]')
       if (!isProcessingRef.current) {
         setTimeout(() => {
-          try { recognition.start() } catch (e) {}
+          try { 
+            recognition.start()
+            setStatus('🎤 듣고 있어요')
+          } catch (e) {}
         }, 500)
       }
     }
@@ -133,11 +168,11 @@ export default function ChildPage() {
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then(() => {
         recognition.start()
-        console.log('[음성 인식 시작]')
+        setStatus('🎤 듣고 있어요')
       })
       .catch((err) => {
         console.error('[마이크 권한 거부]', err)
-        setResponse('🔒 마이크 권한을 허용해주세요')
+        setStatus('🔒 마이크 권한을 허용해주세요')
       })
 
     return () => {
@@ -148,27 +183,27 @@ export default function ChildPage() {
   return (
     <main className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200">
       {/* 메인 */}
-      <div className="text-center mb-8">
-        <div className={`text-9xl mb-4 transition-all duration-300 ${isProcessing ? 'animate-pulse' : 'animate-bounce'}`}>
+      <div className="text-center mb-6">
+        <div className={`text-8xl mb-4 ${isProcessing ? 'animate-pulse' : 'animate-bounce'}`}>
           {isProcessing ? '🤔' : '🎤'}
         </div>
-        <h1 className="text-5xl font-bold text-purple-800 mb-4">아이야!</h1>
-        <p className="text-2xl text-purple-600 font-semibold">
-          {isProcessing ? '💭 생각하는 중...' : '"아이야~" 라고 불러봐!'}
+        <h1 className="text-5xl font-bold text-purple-800 mb-3">아이야!</h1>
+        <p className="text-xl text-purple-600 font-medium">
+          "아이야~" 라고 불러봐!
         </p>
       </div>
 
-      {/* 들린 내용 표시 (디버그용) */}
-      {lastHeard && !isProcessing && (
-        <div className="mb-4 px-6 py-2 bg-gray-100 rounded-full text-gray-600 text-lg">
+      {/* 들린 내용 */}
+      {lastHeard && (
+        <div className="mb-4 px-5 py-2 bg-white/60 rounded-full text-gray-700 text-lg">
           🎧 "{lastHeard}"
         </div>
       )}
 
       {/* 응답 */}
-      {response && !isProcessing && (
-        <div className="mt-4 p-8 bg-white rounded-3xl shadow-2xl max-w-md text-center">
-          <p className="text-3xl text-gray-800 leading-relaxed font-bold">
+      {response && (
+        <div className="mt-2 p-6 bg-white rounded-3xl shadow-xl max-w-sm text-center">
+          <p className="text-2xl text-gray-800 leading-relaxed font-bold">
             {response}
           </p>
         </div>
@@ -176,19 +211,21 @@ export default function ChildPage() {
 
       {/* 로딩 */}
       {isProcessing && (
-        <div className="mt-8">
-          <div className="animate-spin rounded-full h-16 w-16 border-4 border-purple-300 border-t-purple-600"></div>
+        <div className="mt-6">
+          <div className="animate-spin rounded-full h-14 w-14 border-4 border-purple-300 border-t-purple-600"></div>
         </div>
       )}
 
-      {/* 상태 표시 */}
+      {/* 상태 바 */}
       <div className="fixed bottom-4 left-4 right-4 flex justify-center">
-        <div className={`px-6 py-3 rounded-full text-lg font-semibold shadow-lg ${
+        <div className={`px-5 py-2 rounded-full text-base font-semibold shadow-lg ${
           isProcessing 
             ? 'bg-yellow-400 text-gray-800' 
-            : 'bg-green-500 text-white'
+            : status.includes('듣고') 
+              ? 'bg-green-500 text-white'
+              : 'bg-gray-400 text-white'
         }`}>
-          {isProcessing ? '💭 생각 중...' : '🎤 듣고 있어요'}
+          {status}
         </div>
       </div>
     </main>
