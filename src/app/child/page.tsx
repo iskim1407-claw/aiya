@@ -66,7 +66,7 @@ export default function ChildPage() {
     if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
     
     // 작별 인사
-    speak('또 불러줘!', () => {
+    speak('또 불러줘!', undefined, () => {
       updateState('waiting')
       setResponse('')
       setLastHeard('')
@@ -238,7 +238,7 @@ export default function ChildPage() {
           updateSession(true)
           updateState('speaking')
           
-          speak('응! 뭐야?', () => {
+          speak('응! 뭐야?', undefined, () => {
             updateState('listening')
             setLastHeard('')
             resetSessionTimer()
