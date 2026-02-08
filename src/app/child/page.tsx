@@ -127,7 +127,7 @@ export default function ChildPage() {
       
       setDebugMsg('')
       setState('speaking')
-      await speak('응! 뭐야?')
+      await speak('안녕! 뭐하고 놀까?')
       
       recordAndProcess()
       
