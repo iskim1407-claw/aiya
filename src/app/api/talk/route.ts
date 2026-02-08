@@ -72,10 +72,10 @@ export async function POST(request: NextRequest) {
       message: aiResponse,
       audioUrl,
     })
-  } catch (error) {
+  } catch (error: any) {
     console.error('[API Error]', error)
     return NextResponse.json(
-      { ok: false, error: '오류가 발생했습니다.' },
+      { ok: false, error: `오류: ${error?.message || '알 수 없는 오류'}` },
       { status: 500 }
     )
   }
