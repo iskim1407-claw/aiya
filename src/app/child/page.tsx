@@ -143,9 +143,26 @@ export default function ChildPage() {
     window.speechSynthesis.speak(utterance)
   }
 
+  // 작별 인사 체크
+  const isGoodbye = (text: string): boolean => {
+    const goodbyes = ['잘가', '잘 가', '안녕', '바이', '바이바이', '끝', '그만', '다음에', '나중에', '끊어', '꺼']
+    const lower = text.toLowerCase().replace(/\s/g, '')
+    return goodbyes.some(g => lower.includes(g))
+  }
+
   // API 호출
   const callAPI = useCallback(async (text: string) => {
     updateState('thinking')
+    
+    // 작별 인사면 세션 종료
+    if (isGoodbye(text)) {
+      setResponse('응! 또 놀자! 안녕~')
+      updateState('speaking')
+      speak('응! 또 놀자! 안녕~', undefined, () => {
+        endSession()
+      })
+      return
+    }
     
     try {
       const res = await fetch('/api/talk', {
@@ -162,7 +179,7 @@ export default function ChildPage() {
         ...prev,
         { role: 'user', content: text },
         { role: 'assistant', content: message }
-      ].slice(-10))  // 최근 10개만 유지
+      ].slice(-10))
       
       setResponse(message)
       updateState('speaking')
@@ -179,7 +196,7 @@ export default function ChildPage() {
       resetSessionTimer()
       startSessionListening()
     }
-  }, [speak, resetSessionTimer, history])
+  }, [speak, resetSessionTimer, history, endSession])
 
   // 세션 중 듣기 (웨이크 워드 없이)
   const startSessionListening = useCallback(() => {
