@@ -8,11 +8,14 @@ export default function ChildPage() {
   const [state, setState] = useState<State>('waiting')
   const [sessionActive, setSessionActive] = useState(false)
   const [response, setResponse] = useState('')
+  const [lastHeard, setLastHeard] = useState('')
   const [countdown, setCountdown] = useState(0)
   const [history, setHistory] = useState<{role: string, content: string}[]>([])
   
+  const recognitionRef = useRef<any>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
+  const streamRef = useRef<MediaStream | null>(null)
   const stateRef = useRef<State>('waiting')
   const sessionActiveRef = useRef(false)
   const sessionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -32,7 +35,7 @@ export default function ChildPage() {
     sessionActiveRef.current = active
   }, [])
 
-  // 세션 타이머 리셋
+  // 세션 타이머
   const resetSessionTimer = useCallback(() => {
     if (sessionTimeoutRef.current) clearTimeout(sessionTimeoutRef.current)
     if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
@@ -42,31 +45,13 @@ export default function ChildPage() {
       countdownIntervalRef.current = setInterval(() => {
         setCountdown(prev => prev <= 1 ? 0 : prev - 1)
       }, 1000)
-      
-      sessionTimeoutRef.current = setTimeout(() => {
-        endSession()
-      }, SESSION_TIMEOUT)
+      sessionTimeoutRef.current = setTimeout(() => endSession(), SESSION_TIMEOUT)
     }
-  }, [])
-
-  // 세션 종료
-  const endSession = useCallback(() => {
-    updateSession(false)
-    setCountdown(0)
-    setHistory([])
-    if (sessionTimeoutRef.current) clearTimeout(sessionTimeoutRef.current)
-    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
-    
-    speak('또 불러줘!', undefined, () => {
-      updateState('waiting')
-      setResponse('')
-    })
   }, [])
 
   // TTS
   const speak = useCallback((text: string, audioData?: string, onEnd?: () => void) => {
     if (typeof window === 'undefined') { onEnd?.(); return }
-    
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null }
     window.speechSynthesis.cancel()
     
@@ -91,97 +76,93 @@ export default function ChildPage() {
     window.speechSynthesis.speak(utterance)
   }
 
+  // 세션 종료
+  const endSession = useCallback(() => {
+    updateSession(false)
+    setCountdown(0)
+    setHistory([])
+    if (sessionTimeoutRef.current) clearTimeout(sessionTimeoutRef.current)
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
+    
+    speak('또 불러줘!', undefined, () => {
+      updateState('waiting')
+      setResponse('')
+      setLastHeard('')
+      startWakeWordListening()
+    })
+  }, [speak])
+
   // 작별 인사 체크
   const isGoodbye = (text: string): boolean => {
-    const goodbyes = ['잘가', '잘 가', '바이', '바이바이', '끝', '그만', '다음에', '나중에', '끊어', '꺼']
+    const goodbyes = ['잘가', '잘 가', '바이', '바이바이', '끝', '그만', '다음에', '나중에']
     return goodbyes.some(g => text.includes(g))
   }
 
-  // API 호출 (Whisper STT + GPT + TTS)
+  // Whisper로 오디오 처리
   const processAudio = useCallback(async (audioBlob: Blob) => {
     updateState('processing')
     
     try {
-      // 1. Whisper STT
       const formData = new FormData()
       formData.append('audio', audioBlob, 'audio.webm')
       formData.append('history', JSON.stringify(history))
       
-      const res = await fetch('/api/talk-whisper', {
-        method: 'POST',
-        body: formData,
-      })
-      
+      const res = await fetch('/api/talk-whisper', { method: 'POST', body: formData })
       const data = await res.json()
       
-      if (!data.ok) {
-        setResponse('다시 말해줄래?')
-        speak('다시 말해줄래?', undefined, () => {
+      if (!data.ok || !data.transcript) {
+        if (sessionActiveRef.current) {
           updateState('recording')
-          resetSessionTimer()
-          startRecording()
-        })
+          startSessionRecording()
+        } else {
+          updateState('waiting')
+          startWakeWordListening()
+        }
         return
       }
 
       const { transcript, message, audio } = data
+      setLastHeard(transcript)
       
-      // 웨이크 워드 체크 (세션 시작)
-      if (!sessionActiveRef.current) {
-        const wakeWords = ['아이야', '아이얌', '아이아', '아이여', '애야', '이야', '아야', '아이']
-        const hasWakeWord = wakeWords.some(w => transcript.toLowerCase().includes(w))
-        
-        if (!hasWakeWord) {
-          updateState('waiting')
-          return
-        }
-        
-        // 세션 시작
-        updateSession(true)
-      }
-      
-      // 작별 인사 체크
-      if (isGoodbye(transcript)) {
+      // 작별 체크
+      if (sessionActiveRef.current && isGoodbye(transcript)) {
         setResponse('응! 또 놀자! 안녕~')
         speak('응! 또 놀자! 안녕~', undefined, () => endSession())
         return
       }
       
-      // 대화 히스토리 업데이트
-      setHistory(prev => [
-        ...prev,
-        { role: 'user', content: transcript },
-        { role: 'assistant', content: message }
-      ].slice(-10))
+      // 히스토리 업데이트
+      setHistory(prev => [...prev, { role: 'user', content: transcript }, { role: 'assistant', content: message }].slice(-10))
       
       setResponse(message)
       updateState('speaking')
       
       speak(message, audio, () => {
-        updateState('recording')
         resetSessionTimer()
-        startRecording()
+        updateState('recording')
+        startSessionRecording()
       })
       
     } catch (error) {
       console.error('처리 오류:', error)
-      setResponse('잠깐, 다시 해볼까?')
-      speak('잠깐, 다시 해볼까?', undefined, () => {
-        if (sessionActiveRef.current) {
-          updateState('recording')
-          startRecording()
-        } else {
-          updateState('waiting')
-        }
-      })
+      if (sessionActiveRef.current) {
+        updateState('recording')
+        startSessionRecording()
+      } else {
+        updateState('waiting')
+        startWakeWordListening()
+      }
     }
-  }, [history, speak, resetSessionTimer, endSession, updateSession, updateState])
+  }, [history, speak, resetSessionTimer, endSession])
 
-  // 녹음 시작
-  const startRecording = useCallback(async () => {
+  // 세션 중 녹음 (Whisper용)
+  const startSessionRecording = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+      if (!streamRef.current) {
+        streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true })
+      }
+      
+      const mediaRecorder = new MediaRecorder(streamRef.current, { mimeType: 'audio/webm' })
       mediaRecorderRef.current = mediaRecorder
       audioChunksRef.current = []
       
@@ -190,7 +171,6 @@ export default function ChildPage() {
       }
       
       mediaRecorder.onstop = () => {
-        stream.getTracks().forEach(t => t.stop())
         if (audioChunksRef.current.length > 0) {
           const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
           processAudio(audioBlob)
@@ -200,50 +180,96 @@ export default function ChildPage() {
       mediaRecorder.start()
       updateState('recording')
       
-      // 3초 후 자동 중지 (짧은 발화용)
+      // 4초 녹음
       recordingTimeoutRef.current = setTimeout(() => {
         if (mediaRecorderRef.current?.state === 'recording') {
           mediaRecorderRef.current.stop()
         }
-      }, 3000)
+      }, 4000)
       
     } catch (error) {
-      console.error('마이크 오류:', error)
-      updateState('waiting')
+      console.error('녹음 오류:', error)
     }
-  }, [processAudio, updateState])
+  }, [processAudio])
 
-  // 녹음 중지
-  const stopRecording = useCallback(() => {
-    if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current)
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop()
-    }
-  }, [])
+  // 웨이크 워드 감지 (Web Speech API)
+  const startWakeWordListening = useCallback(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SpeechRecognition) return
 
-  // 화면 터치로 녹음 시작/중지
-  const handleTap = useCallback(() => {
-    if (stateRef.current === 'waiting' || stateRef.current === 'recording') {
-      if (stateRef.current === 'recording') {
-        stopRecording()
-      } else {
-        startRecording()
+    if (recognitionRef.current) try { recognitionRef.current.stop() } catch (e) {}
+
+    const recognition = new SpeechRecognition()
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.lang = 'ko-KR'
+    recognitionRef.current = recognition
+
+    const wakeWords = ['아이야', '아이얌', '아이아', '아이여', '애야', '이야', '아야', '아이']
+
+    recognition.onresult = (event: any) => {
+      if (stateRef.current !== 'waiting') return
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript
+        setLastHeard(transcript)
+        
+        const lower = transcript.toLowerCase().replace(/\s/g, '')
+        if (wakeWords.some(w => lower.includes(w))) {
+          console.log('[웨이크 워드!]', transcript)
+          recognition.stop()
+          
+          updateSession(true)
+          updateState('speaking')
+          setLastHeard('')
+          
+          speak('응! 뭐야?', undefined, () => {
+            resetSessionTimer()
+            updateState('recording')
+            startSessionRecording()
+          })
+          return
+        }
       }
     }
-  }, [startRecording, stopRecording])
+
+    recognition.onend = () => {
+      if (stateRef.current === 'waiting' && !sessionActiveRef.current) {
+        setTimeout(() => { try { recognition.start() } catch (e) {} }, 300)
+      }
+    }
+
+    recognition.onerror = (event: any) => {
+      if (event.error !== 'not-allowed' && stateRef.current === 'waiting') {
+        setTimeout(() => { try { recognition.start() } catch (e) {} }, 1000)
+      }
+    }
+
+    try { recognition.start() } catch (e) {}
+  }, [speak, resetSessionTimer, startSessionRecording])
 
   // 초기화
   useEffect(() => {
     window.speechSynthesis?.getVoices()
+    
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then((stream) => {
+        streamRef.current = stream
+        updateState('waiting')
+        startWakeWordListening()
+      })
+      .catch(console.error)
+
     return () => {
       if (sessionTimeoutRef.current) clearTimeout(sessionTimeoutRef.current)
       if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
       if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current)
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop())
     }
-  }, [])
+  }, [startWakeWordListening])
 
   const statusText = {
-    waiting: '👆 터치해서 말해봐!',
+    waiting: '💤 "아이야~" 라고 불러봐!',
     recording: '🎤 듣고 있어요...',
     processing: '💭 생각 중...',
     speaking: '🔊 말하는 중...',
@@ -251,26 +277,16 @@ export default function ChildPage() {
 
   const statusColor = {
     waiting: 'bg-purple-500',
-    recording: 'bg-red-500 animate-pulse',
+    recording: 'bg-green-500 animate-pulse',
     processing: 'bg-yellow-400 text-gray-800',
     speaking: 'bg-blue-500',
   }
 
-  const emoji = {
-    waiting: '😴',
-    recording: '👂',
-    processing: '🤔',
-    speaking: '🗣️',
-  }
-
   return (
-    <main 
-      className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200 select-none"
-      onClick={handleTap}
-    >
+    <main className="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-b from-pink-200 via-purple-100 to-blue-200">
       <div className="text-center mb-6">
         <div className={`text-8xl mb-4 ${state === 'recording' ? 'animate-bounce' : state === 'processing' ? 'animate-pulse' : ''}`}>
-          {emoji[state]}
+          {state === 'waiting' ? '😴' : state === 'recording' ? '👂' : state === 'processing' ? '🤔' : '🗣️'}
         </div>
         <h1 className="text-5xl font-bold text-purple-800 mb-3">아이야!</h1>
         {sessionActive && (
@@ -280,11 +296,15 @@ export default function ChildPage() {
         )}
       </div>
 
+      {lastHeard && (
+        <div className="mb-4 px-5 py-2 bg-white/60 rounded-full text-gray-700 text-lg">
+          🎧 "{lastHeard}"
+        </div>
+      )}
+
       {response && (
         <div className="mt-2 p-6 bg-white rounded-3xl shadow-xl max-w-sm text-center">
-          <p className="text-2xl text-gray-800 leading-relaxed font-bold">
-            {response}
-          </p>
+          <p className="text-2xl text-gray-800 leading-relaxed font-bold">{response}</p>
         </div>
       )}
 
