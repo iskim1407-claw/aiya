@@ -11,7 +11,8 @@ export default function WakeWordDetector({
   onWakeWord,
   isListening = true,
 }: WakeWordDetectorProps) {
-  const [status, setStatus] = useState('시작 중...')
+  const [status, setStatus] = useState('🔄 시작 중...')
+  const [permissionGranted, setPermissionGranted] = useState(false)
   const [isActive, setIsActive] = useState(isListening)
   const recognitionRef = useRef<any>(null)
   const isProcessingRef = useRef(false)
@@ -41,8 +42,25 @@ export default function WakeWordDetector({
     }, delayMs)
   }, [isActive, startRecognition])
 
+  // 마이크 권한 요청
   useEffect(() => {
-    if (!isActive) return
+    async function requestMicPermission() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        stream.getTracks().forEach(track => track.stop())
+        setPermissionGranted(true)
+        setStatus('🎤 듣고 있어요...')
+      } catch (err) {
+        console.error('마이크 권한 거부:', err)
+        setStatus('🔒 마이크 권한을 허용해주세요')
+        setPermissionGranted(false)
+      }
+    }
+    requestMicPermission()
+  }, [])
+
+  useEffect(() => {
+    if (!isActive || !permissionGranted) return
 
     const SpeechRecognition =
       (window as any).SpeechRecognition ||
@@ -192,7 +210,7 @@ export default function WakeWordDetector({
         recognition.stop()
       } catch (e) {}
     }
-  }, [isActive, onWakeWord, scheduleRestart, startRecognition])
+  }, [isActive, permissionGranted, onWakeWord, scheduleRestart, startRecognition])
 
   return (
     <div className="fixed bottom-4 left-4 bg-gradient-to-r from-blue-500 to-purple-500 text-white px-5 py-3 rounded-full text-lg font-semibold shadow-lg">
