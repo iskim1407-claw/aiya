@@ -74,19 +74,51 @@ export default function ChildPage() {
     })
   }, [])
 
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+
   // TTS (OpenAI audio 또는 fallback)
   const speak = useCallback((text: string, audioData?: string, onEnd?: () => void) => {
-    if (typeof window === 'undefined') return
+    if (typeof window === 'undefined') {
+      onEnd?.()
+      return
+    }
+    
+    // 기존 오디오 정리
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current = null
+    }
+    window.speechSynthesis.cancel()
     
     // OpenAI audio가 있으면 사용
     if (audioData) {
-      const audio = new Audio(audioData)
-      audio.onended = () => onEnd?.()
-      audio.onerror = () => {
-        // 실패시 브라우저 TTS fallback
+      try {
+        const audio = new Audio(audioData)
+        audioRef.current = audio
+        
+        audio.onended = () => {
+          console.log('[Audio 재생 완료]')
+          onEnd?.()
+        }
+        
+        audio.onerror = (e) => {
+          console.log('[Audio 에러]', e)
+          speakFallback(text, onEnd)
+        }
+        
+        const playPromise = audio.play()
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => console.log('[Audio 재생 시작]'))
+            .catch((e) => {
+              console.log('[Audio 재생 실패]', e)
+              speakFallback(text, onEnd)
+            })
+        }
+      } catch (e) {
+        console.log('[Audio 생성 실패]', e)
         speakFallback(text, onEnd)
       }
-      audio.play().catch(() => speakFallback(text, onEnd))
       return
     }
     
@@ -95,6 +127,7 @@ export default function ChildPage() {
   }, [])
 
   const speakFallback = (text: string, onEnd?: () => void) => {
+    console.log('[Fallback TTS]', text)
     window.speechSynthesis.cancel()
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = 'ko-KR'
