@@ -9,17 +9,18 @@ const SYSTEM_PROMPT = `너는 "아이야"라는 이름의 2-4세 아이를 위�
 - 아이가 이해할 수 있는 쉬운 단어만 사용
 - 이모티콘 사용하지 마
 - 위험하거나 부적절한 내용은 부드럽게 거절
+- 이전 대화 맥락을 기억하고 자연스럽게 이어가
 
 예시:
 - "안녕" → "안녕! 오늘 기분이 어때?"
 - "넌 누구야" → "나는 아이야! 네 친구야!"
-- "심심해" → "그래? 같이 놀까? 뭐 하고 싶어?"
-- "노래 불러줘" → "반짝반짝 작은별~ 아름답게 비치네~"`
+- "심심해" → "그래? 같이 놀까? 뭐 하고 싶어?"`
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const userText = body.text?.trim()
+    const history = body.history || []  // 대화 히스토리
     
     if (!userText) {
       return NextResponse.json({ ok: false, error: '뭐라고?' }, { status: 400 })
@@ -31,6 +32,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, message: getKeywordResponse(userText) })
     }
 
+    // 대화 메시지 구성 (시스템 + 히스토리 + 현재)
+    const messages = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...history.slice(-10),  // 최근 10개 메시지만
+      { role: 'user', content: userText },
+    ]
+
     // 1. GPT로 텍스트 응답 생성
     const chatResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -40,10 +48,7 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userText },
-        ],
+        messages,
         max_tokens: 100,
         temperature: 0.8,
       }),

@@ -10,6 +10,7 @@ export default function ChildPage() {
   const [response, setResponse] = useState('')
   const [lastHeard, setLastHeard] = useState('')
   const [countdown, setCountdown] = useState(0)
+  const [history, setHistory] = useState<{role: string, content: string}[]>([])
   
   const recognitionRef = useRef<any>(null)
   const stateRef = useRef<State>('waiting')
@@ -62,6 +63,7 @@ export default function ChildPage() {
     console.log('[세션 종료]')
     updateSession(false)
     setCountdown(0)
+    setHistory([])  // 히스토리 초기화
     if (sessionTimeoutRef.current) clearTimeout(sessionTimeoutRef.current)
     if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current)
     
@@ -149,17 +151,23 @@ export default function ChildPage() {
       const res = await fetch('/api/talk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, history }),
       })
       const data = await res.json()
       const message = data.ok ? data.message : '다시 말해줄래?'
-      const audio = data.audio  // OpenAI TTS audio
+      const audio = data.audio
+      
+      // 대화 히스토리 업데이트
+      setHistory(prev => [
+        ...prev,
+        { role: 'user', content: text },
+        { role: 'assistant', content: message }
+      ].slice(-10))  // 최근 10개만 유지
       
       setResponse(message)
       updateState('speaking')
       
       speak(message, audio, () => {
-        // 세션 유지 - 다시 듣기 상태로
         updateState('listening')
         resetSessionTimer()
         startSessionListening()
@@ -171,7 +179,7 @@ export default function ChildPage() {
       resetSessionTimer()
       startSessionListening()
     }
-  }, [speak, resetSessionTimer])
+  }, [speak, resetSessionTimer, history])
 
   // 세션 중 듣기 (웨이크 워드 없이)
   const startSessionListening = useCallback(() => {
