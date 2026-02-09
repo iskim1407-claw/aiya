@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 1. 로컬 Whisper STT (faster-whisper large-v3-turbo)
-    const localSttUrl = process.env.LOCAL_STT_URL || 'https://inches-reveals-associated-beings.trycloudflare.com'
+    const localSttUrl = process.env.LOCAL_STT_URL || 'https://pay-accomplished-interpretation-ralph.trycloudflare.com'
     
     const sttForm = new FormData()
     sttForm.append('audio', audioFile)
